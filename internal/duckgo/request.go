@@ -8,17 +8,18 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"github.com/gin-gonic/gin"
 	"io"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/gin-gonic/gin"
 )
 
 var (
 	Token *XqdgToken
-	UA    = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+	UA    = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
 )
 
 type XqdgToken struct {

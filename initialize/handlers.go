@@ -51,7 +51,7 @@ func (h *Handler) duckduckgo(c *gin.Context) {
 	}
 
 	translated_request := duckgoConvert.ConvertAPIRequest(original_request)
-	response, err := duckgo.POSTconversation(client, translated_request, token, proxyUrl)
+	response, err := duckgo.POSTconversation(client, translated_request, token.Token, proxyUrl)
 	if err != nil {
 		c.JSON(500, gin.H{
 			"error": "request conversion error",
@@ -96,11 +96,10 @@ func (h *Handler) engines(c *gin.Context) {
 	// Supported models
 	modelIDs := []string{
 		"gpt-4o-mini",
-		"o3-mini",
-		"gpt-3.5-turbo-0125",
+		"o4-mini",
 		"claude-3-haiku-20240307",
 		"meta-llama/Llama-3.3-70B-Instruct-Turbo",
-		"mistralai/Mixtral-8x7B-Instruct-v0.1",
+		"mistralai/Mistral-Small-24B-Instruct-2501",
 	}
 
 	for _, modelID := range modelIDs {

@@ -1,12 +1,16 @@
 package duckgo
 
 type ApiRequest struct {
-	Model    string     `json:"model"`
-	Messages []messages `json:"messages"`
+	Model       string     `json:"model"`
+	Messages    []messages `json:"messages"`
+	CanUseTools bool       `json:"canUseTools"`
+	Metadata    metadata   `json:"metadata"`
 }
 type messages struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
+}
+type metadata struct {
 }
 
 func (a *ApiRequest) AddMessage(role string, content string) {

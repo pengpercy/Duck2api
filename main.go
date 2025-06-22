@@ -8,9 +8,8 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/gin-gonic/gin"
-
 	"github.com/acheong08/endless"
+	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 )
 

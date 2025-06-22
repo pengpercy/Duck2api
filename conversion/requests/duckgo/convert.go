@@ -21,12 +21,14 @@ func ConvertAPIRequest(api_request officialtypes.APIRequest) duckgotypes.ApiRequ
 	case strings.HasPrefix(modelLower, "llama-3.3-70b"):
 		realModel = "meta-llama/Llama-3.3-70B-Instruct-Turbo"
 	case strings.HasPrefix(modelLower, "mixtral-8x7b"):
-		realModel = "mistralai/Mixtral-8x7B-Instruct-v0.1"
+		realModel = "mistralai/Mistral-Small-24B-Instruct-2501"
 	}
 
 	duckgo_request.Model = realModel
 	content := buildContent(&api_request)
 	duckgo_request.AddMessage("user", content)
+	duckgo_request.CanUseTools = true
+	// duckgo_request.Metadata = metadata{}
 
 	return duckgo_request
 }

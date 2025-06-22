@@ -25,7 +25,7 @@ FROM debian:stable-slim
 # 安装 Chrome 及其运行时依赖
 RUN apt-get update && apt-get install -y \
     wget \
-    gnupg \               # gnupg 是处理 GPG 密钥所必需的
+    gnupg \
     libnss3 \
     libatk-bridge2.0-0 \
     libcups2 \
@@ -35,15 +35,28 @@ RUN apt-get update && apt-get install -y \
     libxss1 \
     libasound2 \
     libxrandr2 \
-    libappindicator3-1 \ # 注意：libappindicator1 可能已弃用，使用 libappindicator3-1
+    libappindicator3-1 \
     libfontconfig1 \
     fonts-liberation \
     xdg-utils \
     --no-install-recommends && \
+    \
+    # *** 修复：使用更现代的 GPG 密钥管理方式 ***
+    # 1. 下载 Google Chrome 的官方 GPG 密钥
+    # 2. 通过 gpg --dearmor 将其转换为二进制格式
+    # 3. 将二进制密钥文件放置在 /usr/share/keyrings/ 目录下
     wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome-archive-keyring.gpg && \
+    \
+    # 4. 添加 Google Chrome 仓库到 APT 源列表，并使用 signed-by 明确指定密钥文件
     echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome-archive-keyring.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list && \
+    \
+    # 再次更新包列表以识别新添加的仓库
     apt-get update && \
+    \
+    # 安装 Google Chrome 稳定版
     apt-get install -y google-chrome-stable && \
+    \
+    # 清理 APT 缓存以减小镜像大小
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 

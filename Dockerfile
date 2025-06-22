@@ -1,4 +1,4 @@
-FROM golang:1.21 AS builder
+FROM golang:1.23 AS builder
 
 # 禁用 CGO (如果你的 Go 应用不依赖 C 库，这有助于构建静态链接的二进制文件)
 ENV CGO_ENABLED=0

@@ -1,5 +1,5 @@
 # 阶段 1: 构建 Go 应用
-FROM golang:1.21 AS builder
+FROM golang:1.23 AS builder
 
 ENV CGO_ENABLED=0
 WORKDIR /app

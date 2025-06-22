@@ -1,3 +1,5 @@
+# 阶段 1: 构建 Go 应用
+# 使用 Go 1.23 官方镜像作为构建环境
 FROM golang:1.23 AS builder
 
 # 禁用 CGO (如果你的 Go 应用不依赖 C 库，这有助于构建静态链接的二进制文件)
@@ -16,11 +18,14 @@ COPY . .
 # -o /app/duck2api 指定输出路径和名称
 RUN go build -ldflags "-s -w" -o /app/duck2api .
 
+# 阶段 2: 构建最终的运行镜像
+# 基于 Debian Buster Slim (一个更小但包含足够运行 Chrome 的基础镜像)
 FROM debian:stable-slim
 
+# 安装 Chrome 及其运行时依赖
 RUN apt-get update && apt-get install -y \
     wget \
-    gnupg \
+    gnupg \               # gnupg 是处理 GPG 密钥所必需的
     libnss3 \
     libatk-bridge2.0-0 \
     libcups2 \
@@ -30,13 +35,13 @@ RUN apt-get update && apt-get install -y \
     libxss1 \
     libasound2 \
     libxrandr2 \
-    libappindicator1 \
+    libappindicator3-1 \ # 注意：libappindicator1 可能已弃用，使用 libappindicator3-1
     libfontconfig1 \
     fonts-liberation \
     xdg-utils \
     --no-install-recommends && \
-    wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key add - && \
-    echo "deb http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list && \
+    wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome-archive-keyring.gpg && \
+    echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome-archive-keyring.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list && \
     apt-get update && \
     apt-get install -y google-chrome-stable && \
     apt-get clean && \
@@ -48,8 +53,8 @@ WORKDIR /app
 # 从构建阶段复制编译好的 Go 应用
 COPY --from=builder /app/duck2api /app/duck2api
 
-
 # 暴露应用端口
 EXPOSE 8080
 
+# 启动 Go 应用
 CMD ["/app/duck2api"]

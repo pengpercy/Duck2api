@@ -9,12 +9,15 @@ COPY . .
 RUN go build -ldflags "-s -w" -o /app/duck2api .
 
 # 阶段 2: 构建最终的运行镜像
-# FIX: 将 debian:stable-slim 替换为更完整的 debian:stable
 FROM debian:stable
 
-# 安装 Chromium 及其运行时依赖
-# 确保所有依赖列表中的行都以反斜杠 '\' 结尾，除了最后一行
-RUN apt-get update && apt-get install -y \
+# FIX: 在安装软件包之前，显式添加所有必要的 APT 仓库组件和更新仓库
+RUN echo "deb http://deb.debian.org/debian bookworm main contrib non-free" > /etc/apt/sources.list && \
+    echo "deb http://deb.debian.org/debian bookworm-updates main contrib non-free" >> /etc/apt/sources.list && \
+    echo "deb http://security.debian.org/debian-security bookworm-security main contrib non-free" >> /etc/apt/sources.list && \
+    # 第一次更新，确保所有源都被识别
+    apt-get update && \
+    apt-get install -y \
     wget \
     curl \
     gnupg \

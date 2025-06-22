@@ -17,6 +17,8 @@ RUN apt-get update && apt-get install -y \
     wget \
     curl \
     gnupg \
+    # FIX: Add ca-certificates to ensure curl can perform HTTPS requests
+    ca-certificates \
     libnss3 \
     libatk-bridge2.0-0 \
     libcups2 \

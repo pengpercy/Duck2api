@@ -9,7 +9,8 @@ COPY . .
 RUN go build -ldflags "-s -w" -o /app/duck2api .
 
 # 阶段 2: 构建最终的运行镜像
-FROM debian:stable-slim
+# FIX: 将 debian:stable-slim 替换为更完整的 debian:stable
+FROM debian:stable
 
 # 安装 Chromium 及其运行时依赖
 # 确保所有依赖列表中的行都以反斜杠 '\' 结尾，除了最后一行
@@ -33,10 +34,9 @@ RUN apt-get update && apt-get install -y \
     xdg-utils \
     chromium \
     --no-install-recommends && \
-    true 
-
-# 清理 APT 缓存以减小镜像大小
-RUN apt-get clean && \
+    \
+    # 清理 APT 缓存以减小镜像大小
+    apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
 # 设置工作目录

@@ -9,7 +9,7 @@ COPY . .
 RUN go build -ldflags "-s -w" -o /app/duck2api .
 
 # 阶段 2: 构建最终的运行镜像
-FROM debian:stable
+FROM debian:stable-slim
 
 # FIX: 在安装软件包之前，显式添加所有必要的 APT 仓库组件和更新仓库
 RUN echo "deb http://deb.debian.org/debian bookworm main contrib non-free" > /etc/apt/sources.list && \

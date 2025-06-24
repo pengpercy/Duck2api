@@ -88,7 +88,7 @@ func findChromeExecutablePath() string {
 }
 
 // killZombieChrome 查找并杀死可能的僵尸Chrome进程
-func killZombieChrome(chromeExecPath string) error {
+func killZombieChrome() error {
 	var cmd *exec.Cmd
 
 	switch runtime.GOOS {
@@ -173,7 +173,7 @@ func (b *BrowserInstance) Initialize() error {
 	b.chromeExecPath = findChromeExecutablePath()
 
 	// 清理可能的僵尸进程
-	if err := killZombieChrome(b.chromeExecPath); err != nil {
+	if err := killZombieChrome(); err != nil {
 		log.Printf("清理僵尸进程时出错: %v", err)
 	}
 
@@ -309,6 +309,7 @@ func ExecuteObfuscatedJs(base64EncodedJs string) (string, error) {
 
 	// 执行JavaScript
 	rawJsResult, err := browser.ExecuteJS(decodedJs)
+	browser.cleanup()
 	if err != nil {
 		return "", err
 	}

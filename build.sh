@@ -11,12 +11,12 @@ targets=(
     "windows/amd64"
     "linux/amd64"
     "darwin/amd64"
-    # "windows/386"
-    # "linux/386"
-    # "darwin/386"
+    "windows/386"
+    "linux/386"
+    "darwin/386"
     "linux/arm"
     "linux/arm64"
-    # "linux/s390x"    
+    "linux/s390x"    
 )
 
 upxPath=$(command -v upx)

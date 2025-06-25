@@ -222,15 +222,15 @@ func (b *BrowserInstance) Initialize() error {
 	// 创建浏览器上下文
 	b.ctx, b.cancel = chromedp.NewContext(b.allocatorCtx)
 
-	// 快速启动验证（减少超时时间）
-	ctx, _ := context.WithTimeout(b.ctx, 60*time.Second)
-	//defer cancel()
-	// 预热浏览器 - 使用最简单的操作
-	if err := chromedp.Run(ctx, chromedp.Navigate("about:blank")); err != nil {
-		b.initError = fmt.Errorf("启动 Chrome 浏览器失败: %w", err)
-		b.cleanup()
-		return b.initError
-	}
+	// // 快速启动验证（减少超时时间）
+	// ctx, cancel := context.WithTimeout(b.ctx, 60*time.Second)
+	// defer cancel()
+	// // 预热浏览器 - 使用最简单的操作
+	// if err := chromedp.Run(ctx, chromedp.Navigate("about:blank")); err != nil {
+	// 	b.initError = fmt.Errorf("启动 Chrome 浏览器失败: %w", err)
+	// 	b.cleanup()
+	// 	return b.initError
+	// }
 
 	b.initialized = true
 	//log.Println("Chrome 浏览器实例初始化完成")

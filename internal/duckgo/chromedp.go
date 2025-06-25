@@ -189,7 +189,7 @@ func (b *BrowserInstance) Initialize() error {
 	allocatorOptions := []chromedp.ExecAllocatorOption{
 		chromedp.NoFirstRun,
 		chromedp.NoDefaultBrowserCheck,
-		// chromedp.Headless,
+		chromedp.Headless,
 		chromedp.NoSandbox,
 		chromedp.DisableGPU,
 		chromedp.Flag("disable-background-timer-throttling", true),

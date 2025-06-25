@@ -294,6 +294,7 @@ func (b *BrowserInstance) ExecuteJS(jsCode string) (map[string]interface{}, erro
 		return nil, fmt.Errorf("执行 JavaScript 失败: %w", err)
 	}
 	b.initialized = false
+	go killZombieChrome()
 	return result, nil
 }
 

@@ -167,7 +167,7 @@ func (b *BrowserInstance) Initialize() error {
 		return b.initError
 	}
 
-	log.Println("正在初始化 Chrome 浏览器实例...")
+	//log.Println("正在初始化 Chrome 浏览器实例...")
 
 	// 查找Chrome可执行文件路径
 	b.chromeExecPath = findChromeExecutablePath()
@@ -233,7 +233,7 @@ func (b *BrowserInstance) Initialize() error {
 	}
 
 	b.initialized = true
-	log.Println("Chrome 浏览器实例初始化完成")
+	//log.Println("Chrome 浏览器实例初始化完成")
 	return nil
 }
 
@@ -256,10 +256,10 @@ func (b *BrowserInstance) Shutdown() {
 		return
 	}
 
-	log.Println("正在关闭 Chrome 浏览器实例...")
+	//log.Println("正在关闭 Chrome 浏览器实例...")
 	b.cleanup()
 	b.initialized = false
-	log.Println("Chrome 浏览器实例已关闭")
+	//log.Println("Chrome 浏览器实例已关闭")
 }
 
 // ExecuteJS 在浏览器中执行JavaScript

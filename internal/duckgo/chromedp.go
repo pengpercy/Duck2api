@@ -136,7 +136,7 @@ func killZombieChrome() error {
 	}
 
 	// 等待一段时间让进程完全退出
-	time.Sleep(2 * time.Second)
+	time.Sleep(1 * time.Second)
 	log.Println("僵尸Chrome进程清理完成")
 	return nil
 }
@@ -259,6 +259,7 @@ func (b *BrowserInstance) Shutdown() {
 	//log.Println("正在关闭 Chrome 浏览器实例...")
 	b.cleanup()
 	b.initialized = false
+	go killZombieChrome()
 	//log.Println("Chrome 浏览器实例已关闭")
 }
 

@@ -189,7 +189,7 @@ func (b *BrowserInstance) Initialize() error {
 	allocatorOptions := []chromedp.ExecAllocatorOption{
 		chromedp.NoFirstRun,
 		chromedp.NoDefaultBrowserCheck,
-		chromedp.Headless,
+		// chromedp.Headless,
 		chromedp.NoSandbox,
 		chromedp.DisableGPU,
 		chromedp.Flag("disable-background-timer-throttling", true),
@@ -227,13 +227,14 @@ func (b *BrowserInstance) Initialize() error {
 	// defer cancel()
 	// // 预热浏览器 - 使用最简单的操作
 	// if err := chromedp.Run(ctx, chromedp.Navigate("about:blank")); err != nil {
+	// 	b.initialized = false
 	// 	b.initError = fmt.Errorf("启动 Chrome 浏览器失败: %w", err)
 	// 	b.cleanup()
 	// 	return b.initError
 	// }
 
 	b.initialized = true
-	//log.Println("Chrome 浏览器实例初始化完成")
+	// log.Println("Chrome 浏览器实例初始化完成")
 	return nil
 }
 
@@ -278,7 +279,7 @@ func (b *BrowserInstance) ExecuteJS(jsCode string) (map[string]interface{}, erro
 	}
 
 	// 创建任务上下文
-	taskCtx, cancelTask := context.WithTimeout(b.ctx, 60*time.Second)
+	taskCtx, cancelTask := context.WithTimeout(b.ctx, 30*time.Second)
 	defer cancelTask()
 
 	var result map[string]interface{}
@@ -292,7 +293,7 @@ func (b *BrowserInstance) ExecuteJS(jsCode string) (map[string]interface{}, erro
 	if err := chromedp.Run(taskCtx, tasks); err != nil {
 		return nil, fmt.Errorf("执行 JavaScript 失败: %w", err)
 	}
-
+	b.initialized = false
 	return result, nil
 }
 
@@ -310,7 +311,6 @@ func ExecuteObfuscatedJs(base64EncodedJs string) (string, error) {
 
 	// 执行JavaScript
 	rawJsResult, err := browser.ExecuteJS(decodedJs)
-	browser.Shutdown()
 	if err != nil {
 		return "", err
 	}

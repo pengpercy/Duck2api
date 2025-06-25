@@ -224,7 +224,7 @@ func (b *BrowserInstance) Initialize() error {
 
 	// 快速启动验证（减少超时时间）
 	ctx, _ := context.WithTimeout(b.ctx, 60*time.Second)
-
+	//defer cancel()
 	// 预热浏览器 - 使用最简单的操作
 	if err := chromedp.Run(ctx, chromedp.Navigate("about:blank")); err != nil {
 		b.initError = fmt.Errorf("启动 Chrome 浏览器失败: %w", err)
@@ -309,7 +309,7 @@ func ExecuteObfuscatedJs(base64EncodedJs string) (string, error) {
 
 	// 执行JavaScript
 	rawJsResult, err := browser.ExecuteJS(decodedJs)
-	browser.cleanup()
+	browser.Shutdown()
 	if err != nil {
 		return "", err
 	}

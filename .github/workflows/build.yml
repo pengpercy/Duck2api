@@ -3,7 +3,7 @@ name: Build and Release
 on:
   push:
     branches:
-      - main
+      - feature_dev
     paths-ignore:
       - 'README.md'
   workflow_dispatch:

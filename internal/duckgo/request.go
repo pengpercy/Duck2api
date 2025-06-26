@@ -36,7 +36,6 @@ func InitXVQD(client httpclient.AuroraHttpClient, proxyUrl string) (*XqdgToken, 
 			Token: "",
 			M:     sync.Mutex{},
 		}
-		setupGracefulShutdown()
 	}
 	Token.M.Lock()
 	defer Token.M.Unlock()

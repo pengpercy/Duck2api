@@ -1,4 +1,4 @@
-# 使用 Go 1.21 官方镜像作为构建环境
+# 使用 Go 1.23 官方镜像作为构建环境
 FROM golang:1.23 AS builder
 
 # 禁用 CGO

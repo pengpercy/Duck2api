@@ -5,10 +5,22 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
+	"os"
+	"os/signal"
+	"sync"
+	"syscall"
+	"time"
 
 	"github.com/chromedp/chromedp"
+)
+
+var (
+	globalAllocatorCtx       context.Context
+	globalAllocatorCtxCancel context.CancelFunc
+	allocatorInitOnce        sync.Once
 )
 
 // sha256AndBase64 使用 SHA-256 对字符串进行哈希，然后将结果进行 Base64 编码。
@@ -16,50 +28,6 @@ func sha256AndBase64(input string) string {
 	h := sha256.New()
 	h.Write([]byte(input))
 	return base64.StdEncoding.EncodeToString(h.Sum(nil))
-}
-
-// ExecuteJS 在浏览器中执行JavaScript
-func ExecuteJS(jsCode string) (map[string]interface{}, error) {
-	// 构建优化的启动选项
-	allocatorOptions := []chromedp.ExecAllocatorOption{
-		chromedp.NoFirstRun,
-		chromedp.NoDefaultBrowserCheck,
-		chromedp.Headless,
-		chromedp.NoSandbox,
-		chromedp.DisableGPU,
-		chromedp.Flag("disable-background-timer-throttling", true),
-		chromedp.Flag("disable-backgrounding-occluded-windows", true),
-		chromedp.Flag("disable-renderer-backgrounding", true),
-		chromedp.Flag("disable-extensions", true),
-		chromedp.Flag("disable-plugins", true),
-		chromedp.Flag("disable-default-apps", true),
-		chromedp.Flag("disable-background-networking", true),
-		chromedp.Flag("disable-sync", true),
-		chromedp.Flag("disable-translate", true),
-		chromedp.Flag("disable-ipc-flooding-protection", true),
-		chromedp.Flag("disable-dev-shm-usage", true),
-		chromedp.Flag("ignore-certificate-errors", true),
-		chromedp.Flag("ignore-ssl-errors", true),
-		chromedp.Flag("ignore-certificate-errors-spki-list", true),
-		chromedp.WindowSize(1200, 800),
-		chromedp.UserAgent(UA),
-	}
-	// 创建分配器上下文
-	allocatorCtx, _ := chromedp.NewExecAllocator(context.Background(), allocatorOptions...)
-	// create context
-	ctx, cancel := chromedp.NewContext(allocatorCtx)
-	defer cancel()
-
-	// run task
-	var result map[string]interface{}
-	err := chromedp.Run(ctx,
-		chromedp.Navigate("about:blank"),
-		chromedp.Evaluate(jsCode, &result),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("执行 JavaScript 失败: %w", err)
-	}
-	return result, nil
 }
 
 // ExecuteObfuscatedJs 执行经过Base64编码的混淆JavaScript
@@ -113,4 +81,74 @@ func ExecuteObfuscatedJs(base64EncodedJs string) (string, error) {
 
 	// 返回Base64编码的结果
 	return base64.StdEncoding.EncodeToString(finalJsonBytes), nil
+}
+
+// initChromedp 初始化全局的chromedp Allocator
+// 它会连接到一个已存在的Chrome实例。
+func initChromedp() {
+	allocatorInitOnce.Do(func() {
+		log.Println("Initializing chromedp remote allocator...")
+		// 为Allocator创建一个父上下文，当Go程序退出时，可以通过它来取消Allocator
+		globalAllocatorCtx, globalAllocatorCtxCancel = context.WithCancel(context.Background())
+
+		// 定义远程Chrome实例的WebSocket URL, 需Chrome已在127.0.0.1:9222端口启动远程调试
+		wsURL := "ws://127.0.0.1:9222"
+
+		// 创建一个远程Allocator
+		globalAllocatorCtx, globalAllocatorCtxCancel = chromedp.NewRemoteAllocator(globalAllocatorCtx, wsURL)
+
+		log.Printf("Chromedp remote allocator connected to %s", wsURL)
+		setupGracefulShutdown()
+	})
+}
+
+// ExecuteJS 执行给定的JavaScript代码，并返回执行结果。
+// 每次调用都会在一个新的干净的页面（about:blank）上执行。
+func ExecuteJS(jsCode string) (map[string]interface{}, error) {
+	// 确保全局Allocator已经初始化
+	if globalAllocatorCtx == nil {
+		return nil, errors.New("chromedp allocator not initialized. Call initChromedp() first")
+	}
+
+	// 从全局Allocator创建一个新的chromedp上下文。
+	// 这将打开一个新标签页或获取一个目标来执行任务。
+	tabCtx, tabCancel := chromedp.NewContext(globalAllocatorCtx)
+	defer tabCancel() // 确保在函数返回时关闭此标签页
+
+	// 为JS执行设置一个超时，以防止长时间运行的JS阻塞。
+	execCtx, execCancel := context.WithTimeout(tabCtx, 30*time.Second)
+	defer execCancel() // 确保在任务结束时取消此上下文
+
+	var jsResult map[string]interface{}
+	err := chromedp.Run(execCtx,
+		chromedp.Navigate("about:blank"),
+		// 执行JS代码，并将结果绑定到jsResult变量
+		chromedp.Evaluate(jsCode, &jsResult),
+	)
+
+	if err != nil {
+		// 如果JS执行出错，错误信息通常会包含在err中
+		return nil, err
+	}
+
+	return jsResult, nil
+}
+
+// setupGracefulShutdown 设置优雅关闭More actions
+func setupGracefulShutdown() {
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		<-c
+		log.Println("收到退出信号，正在优雅关闭...")
+
+		// 关闭浏览器实例
+		if globalAllocatorCtxCancel != nil {
+			globalAllocatorCtxCancel()
+		}
+		os.Exit(0)
+	}()
+	// 确保程序退出时关闭浏览器
+	//defer globalAllocatorCtxCancel()
 }

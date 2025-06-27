@@ -10,7 +10,9 @@
             "request": "launch",
             "mode": "debug",
             "program": "${workspaceFolder}",
-            "env": {},
+            "env": {
+                "PROXY_URL":"http://127.0.0.1:6152"
+            },
             "args": []
         }
     ]

@@ -98,7 +98,7 @@ func initChromedp() {
 		globalAllocatorCtx, globalAllocatorCtxCancel = chromedp.NewRemoteAllocator(globalAllocatorCtx, wsURL)
 
 		log.Printf("Chromedp remote allocator connected to %s", wsURL)
-		setupGracefulShutdown()
+		//setupGracefulShutdown()
 	})
 }
 

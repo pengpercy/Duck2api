@@ -16,7 +16,7 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Set up Go
-      uses: actions/setup-go@v4
+      uses: actions/setup-go@v5
       with:
         go-version: 'stable'
         check-latest: true
@@ -40,11 +40,11 @@ jobs:
             duck2api-freebsd-amd64.tar.gz
             
     - name: Create release
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v2.3.2
       env:
         GITHUB_TOKEN: ${{ secrets.GHCR_PAT }}
       with:
-        tag_name: v2.1.6
+        tag_name: v2.1.7
         files: |
             duck2api-linux-amd64.tar.gz
             duck2api-windows-amd64.tar.gz

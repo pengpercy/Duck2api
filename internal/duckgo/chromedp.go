@@ -92,13 +92,14 @@ func initChromedp() {
 		globalAllocatorCtx, globalAllocatorCtxCancel = context.WithCancel(context.Background())
 
 		// 定义远程Chrome实例的WebSocket URL, 需Chrome已在127.0.0.1:9222端口启动远程调试
-		wsURL := "ws://127.0.0.1:9222"
-
-		// 创建一个远程Allocator
+		wsURL := os.Getenv("DEVTOOLS_URL")
+		if wsURL == "" {
+			wsURL = "ws://127.0.0.1:9222"
+		}
 		globalAllocatorCtx, globalAllocatorCtxCancel = chromedp.NewRemoteAllocator(globalAllocatorCtx, wsURL)
 
 		log.Printf("Chromedp remote allocator connected to %s", wsURL)
-		//setupGracefulShutdown()
+		setupGracefulShutdown()
 	})
 }
 

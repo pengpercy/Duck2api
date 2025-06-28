@@ -38,10 +38,8 @@ func ExecuteObfuscatedJs(base64EncodedJs string) (string, error) {
 		return "", fmt.Errorf("解码 Base64 JS 字符串失败: %w", err)
 	}
 	decodedJs := string(decodedJsBytes)
-	log.Printf("开始执行JS")
 	// 执行JavaScript
 	rawJsResult, err := ExecuteJS(decodedJs)
-	log.Printf("JS执行结束")
 	if err != nil {
 		return "", err
 	}
@@ -87,7 +85,7 @@ func ExecuteObfuscatedJs(base64EncodedJs string) (string, error) {
 // 它会连接到一个已存在的Chrome实例。
 func initChromedp() {
 	allocatorInitOnce.Do(func() {
-		log.Println("Initializing chromedp remote allocator...")
+		//log.Println("Initializing chromedp remote allocator...")
 		// 为Allocator创建一个父上下文，当Go程序退出时，可以通过它来取消Allocator
 		globalAllocatorCtx, globalAllocatorCtxCancel = context.WithCancel(context.Background())
 
@@ -98,7 +96,7 @@ func initChromedp() {
 		}
 		globalAllocatorCtx, globalAllocatorCtxCancel = chromedp.NewRemoteAllocator(globalAllocatorCtx, wsURL)
 
-		log.Printf("Chromedp remote allocator connected to %s", wsURL)
+		//log.Printf("Chromedp remote allocator connected to %s", wsURL)
 		setupGracefulShutdown()
 	})
 }
@@ -150,6 +148,4 @@ func setupGracefulShutdown() {
 		}
 		os.Exit(0)
 	}()
-	// 确保程序退出时关闭浏览器
-	//defer globalAllocatorCtxCancel()
 }

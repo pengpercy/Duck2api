@@ -46,21 +46,25 @@ func InitXVQD(client httpclient.AuroraHttpClient, proxyUrl string) (*XqdgToken, 
 			return Token, err
 		}
 		defer status.Body.Close()
-		xvqdHash1 := status.Header.Get("X-Vqd-Hash-1")
-		if xvqdHash1 == "" {
-			return Token, errors.New("no X-Vqd-Hash-1 token")
-		}
-		// 调用函数执行 JS 并获取处理后的、Base64 编码的结果。
-		token, err := ExecuteObfuscatedJs(xvqdHash1)
-		if err != nil {
-			log.Fatalf("执行 JavaScript 失败: %v", err)
-		}
+		return getToken(status.Header)
+	}
+	return Token, nil
+}
 
-		Token.Token = token
-		Token.TokenHash = token //status.Header.Get("X-Vqd-Hash-1")
-		Token.ExpireAt = time.Now().Add(time.Minute * 3)
+func getToken(header http.Header) (*XqdgToken, error) {
+	xvqdHash1 := header.Get("X-Vqd-Hash-1")
+	if xvqdHash1 == "" {
+		return Token, errors.New("no X-Vqd-Hash-1 token")
+	}
+	// 调用函数执行 JS 并获取处理后的、Base64 编码的结果。
+	token, err := ExecuteObfuscatedJs(xvqdHash1)
+	if err != nil {
+		log.Fatalf("执行 JavaScript 失败: %v", err)
 	}
 
+	Token.Token = token
+	Token.TokenHash = token //status.Header.Get("X-Vqd-Hash-1")
+	Token.ExpireAt = time.Now().Add(time.Minute * 3)
 	return Token, nil
 }
 
@@ -93,6 +97,7 @@ func POSTconversation(client httpclient.AuroraHttpClient, request duckgotypes.Ap
 	if err != nil {
 		return nil, err
 	}
+	go getToken(response.Header)
 	return response, nil
 }
 

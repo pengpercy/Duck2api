@@ -12,3 +12,5 @@ services:
   chromedp:
     image: chromedp/headless-shell:stable
     container_name: chromedp
+    command:
+      - "--disable-blink-features=AutomationControlled"

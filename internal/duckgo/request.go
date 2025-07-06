@@ -104,7 +104,7 @@ func POSTconversation(client httpclient.AuroraHttpClient, request duckgotypes.Ap
 func Handle_request_error(c *gin.Context, response *http.Response) bool {
 	if response.StatusCode != 200 {
 		// Try read response body as JSON
-		var error_response map[string]interface{}
+		var error_response map[string]any
 		err := json.NewDecoder(response.Body).Decode(&error_response)
 		if err != nil {
 			// Read response body

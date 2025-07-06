@@ -31,20 +31,14 @@ func sha256AndBase64(input string) string {
 }
 
 func ExecuteObfuscatedJs(base64EncodedJs string) (string, error) {
-	// 解码Base64编码的JavaScript
 	decodedJsBytes, err := base64.StdEncoding.DecodeString(base64EncodedJs)
 	if err != nil {
 		return "", fmt.Errorf("解码 Base64 JS 字符串失败: %w", err)
 	}
-	decodedJs := string(decodedJsBytes)
-	// decodedJs = "(()=>{return {fun:navigator.webdriver}})()"
-	// 执行JavaScript
-	rawJsResult, err := ExecuteJS(decodedJs)
+	rawJsResult, err := ExecuteJS(string(decodedJsBytes))
 	if err != nil {
 		return "", err
 	}
-
-	// 检查执行结果
 	if rawJsResult == nil {
 		return "", fmt.Errorf("JS 执行返回空结果")
 	}
@@ -52,39 +46,25 @@ func ExecuteObfuscatedJs(base64EncodedJs string) (string, error) {
 		return "", fmt.Errorf("JS 执行报告错误: %s (详情: %v)", errMsg, rawJsResult["stack"])
 	}
 
-	// 后处理：对 client_hashes 进行 SHA-256 和 Base64 编码
-	if clientHashesInterface, ok := rawJsResult["client_hashes"].([]any); ok && len(clientHashesInterface) >= 3 {
-		// 处理 client_hashes[0]
-		if combinedUserAgentHash, ok := clientHashesInterface[0].(string); ok {
-			rawJsResult["client_hashes"].([]any)[0] = sha256AndBase64(combinedUserAgentHash)
-		} else {
-			log.Printf("警告: client_hashes[0] 不是字符串或格式不正确，跳过处理。")
+	if hashes, ok := rawJsResult["client_hashes"].([]any); ok && len(hashes) >= 3 {
+		for i := range 3 {
+			if s, ok := hashes[i].(string); ok {
+				hashes[i] = sha256AndBase64(s)
+			} else {
+				log.Printf("警告: client_hashes[%d] 不是字符串或格式不正确，跳过处理。", i)
+			}
 		}
-
-		// 处理 client_hashes[1]
-		if htmlParsingBasedHash, ok := clientHashesInterface[1].(string); ok {
-			rawJsResult["client_hashes"].([]any)[1] = sha256AndBase64(htmlParsingBasedHash)
-		} else {
-			log.Printf("警告: client_hashes[1] 不是字符串或格式不正确，跳过处理。")
+		if meta, ok := rawJsResult["meta"].(map[string]any); ok {
+			meta["origin"] = "https://duckduckgo.com"
 		}
-		// 处理 client_hashes[1]
-		if htmlParsingBasedHash, ok := clientHashesInterface[2].(string); ok {
-			rawJsResult["client_hashes"].([]any)[2] = sha256AndBase64(htmlParsingBasedHash)
-		} else {
-			log.Printf("警告: client_hashes[2] 不是字符串或格式不正确，跳过处理。")
-		}
-		rawJsResult["meta"].(map[string]any)["origin"] = "https://duckduckgo.com"
 	} else {
 		log.Printf("警告: 未找到 client_hashes 数组或长度不足，跳过后处理。")
 	}
 
-	// 序列化结果为JSON
 	finalJsonBytes, err := json.Marshal(rawJsResult)
 	if err != nil {
 		return "", fmt.Errorf("序列化最终 JSON 结果失败: %w", err)
 	}
-
-	// 返回Base64编码的结果
 	return base64.StdEncoding.EncodeToString(finalJsonBytes), nil
 }
 

@@ -47,7 +47,7 @@ func ExecuteObfuscatedJs(base64EncodedJs string) (string, error) {
 	}
 
 	if hashes, ok := rawJsResult["client_hashes"].([]any); ok && len(hashes) >= 3 {
-		for i := range 3 {
+		for i := range len(hashes) {
 			if s, ok := hashes[i].(string); ok {
 				hashes[i] = sha256AndBase64(s)
 			} else {

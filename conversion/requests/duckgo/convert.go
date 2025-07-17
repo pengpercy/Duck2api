@@ -26,7 +26,8 @@ func ConvertAPIRequest(api_request officialtypes.APIRequest) duckgotypes.ApiRequ
 
 	duckgo_request.Model = realModel
 	content := buildContent(&api_request)
-	duckgo_request.AddMessage("user", content)
+	duckgo_request.AddMessage("user", content, nil)
+	// buildContentV2(&api_request, &duckgo_request)
 	duckgo_request.CanUseTools = true
 	// duckgo_request.Metadata = metadata{}
 
@@ -43,10 +44,10 @@ func buildContent(api_request *officialtypes.APIRequest) string {
 			}
 			contentStr := ""
 			// 判断 apiMessage.Content 是否为数组
-			if arrayContent, ok := apiMessage.Content.([]interface{}); ok {
+			if arrayContent, ok := apiMessage.Content.([]any); ok {
 				// 如果是数组，遍历数组，查找第一个 type 为 "text" 的元素
 				for _, element := range arrayContent {
-					if elementMap, ok := element.(map[string]interface{}); ok {
+					if elementMap, ok := element.(map[string]any); ok {
 						if elementMap["type"] == "text" {
 							contentStr = elementMap["text"].(string)
 							break
@@ -61,3 +62,69 @@ func buildContent(api_request *officialtypes.APIRequest) string {
 	}
 	return content.String()
 }
+
+// func buildContentV2(api_request *officialtypes.APIRequest, duckgo_request *duckgotypes.ApiRequest) {
+// 	// var content strings.Builder
+// 	for _, apiMessage := range api_request.Messages {
+// 		role := apiMessage.Role
+// 		if role == "user" || role == "system" || role == "assistant" {
+// 			if role == "system" {
+// 				role = "user"
+// 			}
+// 			switch role {
+// 			case "user":
+// 				if arrayContent, ok := apiMessage.Content.([]any); ok {
+// 					// 如果是数组，遍历数组，查找第一个 type 为 "text" 的元素
+// 					for _, element := range arrayContent {
+// 						if elementMap, ok := element.(map[string]any); ok {
+// 							if elementMap["type"].(string) == "text" {
+// 								// contentStr = elementMap["text"].(string)
+// 								// break
+// 							} else if elementMap["type"] == "image_url" {
+// 								if image_url, ok := elementMap["image_url"].(map[string]any); ok {
+// 									elementMap["type"] = "image"
+// 									dataURL := image_url["url"].(string)
+// 									elementMap["image"] = dataURL
+// 									mimetype, _ := GetMimeType(dataURL)
+// 									elementMap["mimeType"] = mimetype
+// 								}
+// 							}
+// 						}
+// 					}
+// 					duckgo_request.AddMessage(role, arrayContent, nil)
+// 				} else {
+// 					duckgo_request.AddMessage(role, apiMessage.Content, nil)
+// 				}
+// 			case "assistant":
+// 				parts := []duckgotypes.Part{
+// 					{
+// 						Type: "text",
+// 						Text: apiMessage.Content.(string),
+// 					},
+// 				}
+// 				duckgo_request.AddMessage(role, nil, parts)
+
+// 			}
+// 		}
+// 	}
+// }
+
+// // GetMimeType 根据给定的 dataURL 返回 MIME 类型
+// func GetMimeType(dataURL string) (string, error) {
+// 	// 使用正则表达式提取 Base64 数据
+// 	re := regexp.MustCompile(`^data:([^;]+);base64,(.+)$`)
+// 	matches := re.FindStringSubmatch(dataURL)
+// 	if len(matches) < 3 {
+// 		return "", fmt.Errorf("invalid data URL format")
+// 	}
+// 	// 提取 Base64 数据部分
+// 	base64Data := matches[2]
+// 	// 解码 Base64 数据
+// 	data, err := base64.StdEncoding.DecodeString(base64Data)
+// 	if err != nil {
+// 		return "", err
+// 	}
+// 	// 检测 MIME 类型
+// 	mimeType := http.DetectContentType(data)
+// 	return mimeType, nil
+// }

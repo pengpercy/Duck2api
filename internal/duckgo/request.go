@@ -97,7 +97,7 @@ func POSTconversation(client httpclient.AuroraHttpClient, request duckgotypes.Ap
 	if err != nil {
 		return nil, err
 	}
-	go getToken(response.Header)
+	// go getToken(response.Header)
 	return response, nil
 }
 

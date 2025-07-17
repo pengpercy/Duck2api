@@ -9,7 +9,7 @@ type ApiRequest struct {
 type messages struct {
 	Role    string `json:"role"`
 	Content any    `json:"content"`
-	Parts   []Part `json:"parts"`
+	// Parts   []Part `json:"parts"`
 }
 type metadata struct {
 }
@@ -18,11 +18,11 @@ type Part struct {
 	Text string `json:"text"`
 }
 
-func (a *ApiRequest) AddMessage(role string, content any, parts []Part) {
+func (a *ApiRequest) AddMessage(role string, content any) {
 	a.Messages = append(a.Messages, messages{
 		Role:    role,
 		Content: content,
-		Parts:   parts,
+		// Parts:   parts,
 	})
 }
 

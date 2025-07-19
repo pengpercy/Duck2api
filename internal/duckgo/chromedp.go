@@ -92,7 +92,7 @@ func initChromedp() {
 // ExecuteJS 执行给定的JavaScript代码，并返回执行结果。
 // 每次调用都会在一个新的干净的页面（about:blank）上执行。
 func ExecuteJS(jsCode string) (map[string]any, error) {
-	jsCode = fmt.Sprintf("function wrapper() { return %s; }; wrapper();", jsCode)
+	// jsCode = fmt.Sprintf("function wrapper() { return %s; }; wrapper();", jsCode)
 	// 确保全局Allocator已经初始化
 	if globalAllocatorCtx == nil {
 		return nil, errors.New("chromedp allocator not initialized. Call initChromedp() first")

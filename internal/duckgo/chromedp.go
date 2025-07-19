@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 )
 
@@ -91,6 +92,7 @@ func initChromedp() {
 // ExecuteJS 执行给定的JavaScript代码，并返回执行结果。
 // 每次调用都会在一个新的干净的页面（about:blank）上执行。
 func ExecuteJS(jsCode string) (map[string]any, error) {
+	jsCode = fmt.Sprintf("function wrapper() { return %s; }; wrapper();", jsCode)
 	// 确保全局Allocator已经初始化
 	if globalAllocatorCtx == nil {
 		return nil, errors.New("chromedp allocator not initialized. Call initChromedp() first")
@@ -107,9 +109,11 @@ func ExecuteJS(jsCode string) (map[string]any, error) {
 
 	var jsResult map[string]any
 	err := chromedp.Run(execCtx,
-		chromedp.Navigate("about:blank"),
-		// 执行JS代码，并将结果绑定到jsResult变量
-		chromedp.Evaluate(jsCode, &jsResult),
+		chromedp.Navigate("https://duckduckgo.com/?q=DuckDuckGo&ia=chat"),
+		chromedp.WaitVisible(`body`, chromedp.ByQuery),
+		chromedp.Evaluate(jsCode, &jsResult, func(p *runtime.EvaluateParams) *runtime.EvaluateParams {
+			return p.WithAwaitPromise(true)
+		}),
 	)
 
 	if err != nil {

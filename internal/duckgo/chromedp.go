@@ -109,7 +109,7 @@ func ExecuteJS(jsCode string) (map[string]any, error) {
 
 	var jsResult map[string]any
 	err := chromedp.Run(execCtx,
-		chromedp.Navigate("https://duckduckgo.com/?q=DuckDuckGo&ia=chat"),
+		chromedp.Navigate("about:blank"),
 		chromedp.WaitVisible(`body`, chromedp.ByQuery),
 		chromedp.Evaluate(jsCode, &jsResult, func(p *runtime.EvaluateParams) *runtime.EvaluateParams {
 			return p.WithAwaitPromise(true)

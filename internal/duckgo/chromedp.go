@@ -22,7 +22,14 @@ var (
 	globalAllocatorCtx       context.Context
 	globalAllocatorCtxCancel context.CancelFunc
 	allocatorInitOnce        sync.Once
+	sanbox                   *Sanbox
 )
+
+type Sanbox struct {
+	Url      string     `json:"url"`
+	M        sync.Mutex `json:"-"`
+	ExpireAt time.Time  `json:"expire"`
+}
 
 // sha256AndBase64 使用 SHA-256 对字符串进行哈希，然后将结果进行 Base64 编码。
 func sha256AndBase64(input string) string {
@@ -36,7 +43,7 @@ func ExecuteObfuscatedJs(base64EncodedJs string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("解码 Base64 JS 字符串失败: %w", err)
 	}
-	rawJsResult, err := ExecuteJS(string(decodedJsBytes))
+	rawJsResult, err := GenerateParams(string(decodedJsBytes))
 	if err != nil {
 		return "", err
 	}
@@ -89,9 +96,51 @@ func initChromedp() {
 	})
 }
 
+// GenerateParams 执行给定的JavaScript代码，并返回执行结果。
+// 每次调用都会在一个新的干净的页面（about:blank）上执行。
+func GenerateParams(jsCode string) (map[string]any, error) {
+	url, err := getSanboxUrl()
+	if err != nil {
+		return nil, fmt.Errorf("获取SanboxUrl失败: %w", err)
+	}
+	return ExecuteJS(jsCode, url)
+}
+
+func getSanboxUrl() (string, error) {
+	if sanbox == nil {
+		sanbox = &Sanbox{
+			Url: "",
+			M:   sync.Mutex{},
+		}
+	}
+	sanbox.M.Lock()
+	defer sanbox.M.Unlock()
+	if sanbox.Url == "" || sanbox.ExpireAt.Before(time.Now()) {
+		jsCode := `(function () { return { url: 'data:text/html;charset=utf-8,' + encodeURIComponent(window.top.document.documentElement.outerHTML) } })();`
+		url := "https://duckduckgo.com/?q=DuckDuckGo&ia=chat"
+		rawJsResult, err := ExecuteJS(jsCode, url)
+		if err != nil {
+			return "", err
+		}
+		if rawJsResult == nil {
+			return "", fmt.Errorf("JS 执行返回空结果")
+		}
+		if sanboxUrl, ok := rawJsResult["url"].(string); ok && len(sanboxUrl) > 0 {
+			sanbox.Url = sanboxUrl
+			sanbox.ExpireAt = time.Now().Add(time.Hour * 24)
+			return sanboxUrl, nil
+		} else {
+			return "", fmt.Errorf("获取SanboxUrl失败: %w", err)
+		}
+	} else {
+		return sanbox.Url, nil
+	}
+
+}
+
 // ExecuteJS 执行给定的JavaScript代码，并返回执行结果。
 // 每次调用都会在一个新的干净的页面（about:blank）上执行。
-func ExecuteJS(jsCode string) (map[string]any, error) {
+func ExecuteJS(jsCode string, url string) (map[string]any, error) {
 	// jsCode = fmt.Sprintf("function wrapper() { return %s; }; wrapper();", jsCode)
 	// 确保全局Allocator已经初始化
 	if globalAllocatorCtx == nil {
@@ -109,7 +158,7 @@ func ExecuteJS(jsCode string) (map[string]any, error) {
 
 	var jsResult map[string]any
 	err := chromedp.Run(execCtx,
-		chromedp.Navigate("about:blank"),
+		chromedp.Navigate(url),
 		chromedp.WaitVisible(`body`, chromedp.ByQuery),
 		chromedp.Evaluate(jsCode, &jsResult, func(p *runtime.EvaluateParams) *runtime.EvaluateParams {
 			return p.WithAwaitPromise(true)

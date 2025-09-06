@@ -11,6 +11,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -63,8 +65,14 @@ func getToken(header http.Header) (*XqdgToken, error) {
 	}
 
 	Token.Token = token
-	Token.TokenHash = token //status.Header.Get("X-Vqd-Hash-1")
-	Token.ExpireAt = time.Now().Add(time.Minute * 3)
+	expiredSecondStr := os.Getenv("EXPIRED_SECOND")
+	expiredSecond := 60 // default value
+	if expiredSecondStr != "" {
+		if v, err := strconv.Atoi(expiredSecondStr); err == nil {
+			expiredSecond = v
+		}
+	}
+	Token.ExpireAt = time.Now().Add(time.Duration(expiredSecond) * time.Second)
 	return Token, nil
 }
 

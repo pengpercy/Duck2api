@@ -102,6 +102,10 @@ func initChromedp() {
 		//log.Printf("Chromedp remote allocator connected to %s", wsURL)
 		setupGracefulShutdown()
 	})
+	_, _, err := getSanboxUrl()
+	if err != nil {
+		// fmt.Errorf("获取SanboxUrl失败: %w", err)
+	}
 }
 
 // 生成用于编码Token的参数。 GenerateParams 执行给定的JavaScript代码，并返回执行结果。

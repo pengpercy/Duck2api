@@ -63,7 +63,11 @@ func getToken(header http.Header) (*XqdgToken, error) {
 	if err != nil {
 		log.Fatalf("执行 JavaScript 失败: %v", err)
 	}
+	setToken(token)
+	return Token, nil
+}
 
+func setToken(token string) {
 	Token.Token = token
 	expiredSecondStr := os.Getenv("EXPIRED_SECOND")
 	expiredSecond := 60 // default value
@@ -73,7 +77,6 @@ func getToken(header http.Header) (*XqdgToken, error) {
 		}
 	}
 	Token.ExpireAt = time.Now().Add(time.Duration(expiredSecond) * time.Second)
-	return Token, nil
 }
 
 func postStatus(client httpclient.AuroraHttpClient, proxyUrl string) (*http.Response, error) {
@@ -105,7 +108,7 @@ func POSTconversation(client httpclient.AuroraHttpClient, request duckgotypes.Ap
 	if err != nil {
 		return nil, err
 	}
-	// go getToken(response.Header)
+	go getToken(response.Header)
 	return response, nil
 }
 

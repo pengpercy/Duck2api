@@ -160,7 +160,7 @@ func ExecuteJS(jsCode string, url string) (map[string]any, error) {
 	var jsResult map[string]any
 	err := chromedp.Run(execCtx,
 		chromedp.Navigate(url),
-		chromedp.Poll(`document.readyState === "complete"`, nil),
+		chromedp.Poll(`document.readyState === "complete" && document.querySelectorAll("#jsa").length > 0`, nil),
 		chromedp.WaitVisible(`body`, chromedp.ByQuery),
 		chromedp.Evaluate(jsCode, &jsResult, func(p *runtime.EvaluateParams) *runtime.EvaluateParams {
 			return p.WithAwaitPromise(true)

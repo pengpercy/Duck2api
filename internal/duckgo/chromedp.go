@@ -43,7 +43,10 @@ func ExecuteObfuscatedJs(base64EncodedJs string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("解码 Base64 JS 字符串失败: %w", err)
 	}
-	rawJsResult, err := GenerateParams(string(decodedJsBytes))
+	rawJsResult, token, err := GenerateParams(string(decodedJsBytes))
+	if token != "" {
+		return token, err
+	}
 	if err != nil {
 		return "", err
 	}
@@ -53,7 +56,12 @@ func ExecuteObfuscatedJs(base64EncodedJs string) (string, error) {
 	if errMsg, ok := rawJsResult["error"].(string); ok && errMsg != "" {
 		return "", fmt.Errorf("JS 执行报告错误: %s (详情: %v)", errMsg, rawJsResult["stack"])
 	}
+	return EncodeToToken(rawJsResult)
 
+}
+
+// 将参数编码成Token
+func EncodeToToken(rawJsResult map[string]any) (string, error) {
 	if hashes, ok := rawJsResult["client_hashes"].([]any); ok && len(hashes) >= 3 {
 		for i := range len(hashes) {
 			if s, ok := hashes[i].(string); ok {
@@ -96,17 +104,22 @@ func initChromedp() {
 	})
 }
 
-// GenerateParams 执行给定的JavaScript代码，并返回执行结果。
+// 生成用于编码Token的参数。 GenerateParams 执行给定的JavaScript代码，并返回执行结果。
 // 每次调用都会在一个新的干净的页面（about:blank）上执行。
-func GenerateParams(jsCode string) (map[string]any, error) {
-	url, err := getSanboxUrl()
-	if err != nil {
-		return nil, fmt.Errorf("获取SanboxUrl失败: %w", err)
+func GenerateParams(jsCode string) (map[string]any, string, error) {
+	url, token, err := getSanboxUrl()
+	if token != "" {
+		return nil, token, err
 	}
-	return ExecuteJS(jsCode, url)
+	if err != nil {
+		return nil, token, fmt.Errorf("获取SanboxUrl失败: %w", err)
+	}
+	jsResult, err := ExecuteJS(jsCode, url)
+	return jsResult, token, err
 }
 
-func getSanboxUrl() (string, error) {
+// 获取沙盒URL，并刷新最新Token
+func getSanboxUrl() (string, string, error) {
 	if sanbox == nil {
 		sanbox = &Sanbox{
 			Url: "",
@@ -116,25 +129,31 @@ func getSanboxUrl() (string, error) {
 	sanbox.M.Lock()
 	defer sanbox.M.Unlock()
 	if sanbox.Url == "" || sanbox.ExpireAt.Before(time.Now()) {
-		jsCode := `(function () { return { url: 'data:text/html;charset=utf-8,' + encodeURIComponent(window.top.document.documentElement.outerHTML) } })();`
+		jsCode := `const base64DecodeUnicode = str => decodeURIComponent(atob(str).split('').map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join('')); const executeHeaderCode = async () => { try { const response = await fetch('https://duckduckgo.com/duckchat/v1/status', { credentials: 'include', headers: { 'x-vqd-accept': '1' } }); const hash = response.headers.get('X-Vqd-Hash-1'); if (!hash) throw new Error('Header X-Vqd-Hash-1 not found.'); return eval(base64DecodeUnicode(hash)); } catch (error) { console.error('Error:', error); throw error; } }; (async function () { return { "url": 'data:text/html;charset=utf-8,' + encodeURIComponent(window.top.document.documentElement.outerHTML), "jsResult": await executeHeaderCode() }; })();`
 		url := "https://duckduckgo.com/?q=DuckDuckGo&ia=chat"
 		rawJsResult, err := ExecuteJS(jsCode, url)
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 		if rawJsResult == nil {
-			return "", fmt.Errorf("JS 执行返回空结果")
+			return "", "", fmt.Errorf("JS 执行返回空结果")
 		}
 		if sanboxUrl, ok := rawJsResult["url"].(string); ok && len(sanboxUrl) > 0 {
 			sanbox.Url = sanboxUrl
 			sanbox.ExpireAt = time.Now().Add(time.Hour * 24)
+			jsResult := rawJsResult["jsResult"].(map[string]any)
+			token, err := EncodeToToken(jsResult)
+			if err != nil {
+				return "", "", fmt.Errorf("获取SanboxUrl失败: %w", err)
+			}
+			setToken(token)
 			//fmt.Println(sanboxUrl)
-			return sanboxUrl, nil
+			return sanboxUrl, token, nil
 		} else {
-			return "", fmt.Errorf("获取SanboxUrl失败: %w", err)
+			return "", "", fmt.Errorf("获取SanboxUrl失败: %w", err)
 		}
 	} else {
-		return sanbox.Url, nil
+		return sanbox.Url, "", nil
 	}
 
 }

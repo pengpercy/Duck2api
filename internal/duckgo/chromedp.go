@@ -128,6 +128,7 @@ func getSanboxUrl() (string, error) {
 		if sanboxUrl, ok := rawJsResult["url"].(string); ok && len(sanboxUrl) > 0 {
 			sanbox.Url = sanboxUrl
 			sanbox.ExpireAt = time.Now().Add(time.Hour * 24)
+			//fmt.Println(sanboxUrl)
 			return sanboxUrl, nil
 		} else {
 			return "", fmt.Errorf("获取SanboxUrl失败: %w", err)

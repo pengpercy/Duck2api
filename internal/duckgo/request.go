@@ -104,6 +104,7 @@ func POSTconversation(client httpclient.AuroraHttpClient, request duckgotypes.Ap
 	header := createHeader()
 	header.Set("accept", "text/event-stream")
 	header.Set("x-vqd-hash-1", token)
+	// fmt.Println(string(body_json))
 	response, err := client.Request(httpclient.POST, "https://duckduckgo.com/duckchat/v1/chat", header, nil, bytes.NewBuffer(body_json))
 	if err != nil {
 		return nil, err

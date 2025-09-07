@@ -31,6 +31,12 @@ type Sanbox struct {
 	ExpireAt time.Time  `json:"expire"`
 }
 
+type Scripts struct {
+	Content  string     `json:"content"`
+	M        sync.Mutex `json:"-"`
+	ExpireAt time.Time  `json:"expire"`
+}
+
 // sha256AndBase64 使用 SHA-256 对字符串进行哈希，然后将结果进行 Base64 编码。
 func sha256AndBase64(input string) string {
 	h := sha256.New()

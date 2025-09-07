@@ -3,60 +3,97 @@ package duckgo
 import (
 	duckgotypes "aurora/typings/duckgo"
 	officialtypes "aurora/typings/official"
-	"strings"
 )
 
-func ConvertAPIRequest(api_request officialtypes.APIRequest) duckgotypes.ApiRequest {
-	inputModel := api_request.Model
-	duckgo_request := duckgotypes.NewApiRequest(inputModel)
-	realModel := inputModel
-
-	// 如果模型未进行映射，则直接使用输入模型，方便后续用户使用 duckduckgo 添加的新模型。
-	modelLower := strings.ToLower(inputModel)
-	switch {
-	case strings.HasPrefix(modelLower, "gpt-3.5"):
-		realModel = "gpt-4o-mini"
-	case strings.HasPrefix(modelLower, "claude-3-haiku"):
-		realModel = "claude-3-haiku-20240307"
-	case strings.HasPrefix(modelLower, "llama-3.3-70b"):
-		realModel = "meta-llama/Llama-3.3-70B-Instruct-Turbo"
-	case strings.HasPrefix(modelLower, "mixtral-8x7b"):
-		realModel = "mistralai/Mistral-Small-24B-Instruct-2501"
-	}
-
-	duckgo_request.Model = realModel
-	content := buildContent(&api_request)
-	duckgo_request.AddMessage("user", content)
-	duckgo_request.CanUseTools = true
-
-	return duckgo_request
+func ConvertAPIRequest(apiRequest officialtypes.APIRequest) duckgotypes.ApiRequest {
+	duckgoRequest := duckgotypes.NewApiRequest(apiRequest.Model)
+	duckgoRequest.Model = apiRequest.Model
+	buildMessage(&apiRequest, &duckgoRequest)
+	return duckgoRequest
 }
 
-func buildContent(api_request *officialtypes.APIRequest) string {
-	var content strings.Builder
-	for _, apiMessage := range api_request.Messages {
-		role := apiMessage.Role
-		if role == "user" || role == "system" || role == "assistant" {
-			if role == "system" {
-				role = "user"
-			}
-			contentStr := ""
-			// 判断 apiMessage.Content 是否为数组
-			if arrayContent, ok := apiMessage.Content.([]any); ok {
-				// 如果是数组，遍历数组，查找第一个 type 为 "text" 的元素
-				for _, element := range arrayContent {
-					if elementMap, ok := element.(map[string]any); ok {
-						if elementMap["type"] == "text" {
-							contentStr = elementMap["text"].(string)
-							break
-						}
-					}
-				}
-			} else {
-				contentStr, _ = apiMessage.Content.(string)
-			}
-			content.WriteString(role + ":" + contentStr + ";\r\n")
+func buildMessage(apiRequest *officialtypes.APIRequest, duckgoRequest *duckgotypes.ApiRequest) {
+	duckgoRequest.CanUseTools = true
+	for _, msg := range apiRequest.Messages {
+		if !isValidRole(msg.Role) {
+			continue
+		}
+
+		role := normalizeRole(msg.Role)
+		switch role {
+		case "user":
+			handleUserMessage(msg.Content, duckgoRequest)
+		case "assistant":
+			handleAssistantMessage(msg.Content, duckgoRequest)
 		}
 	}
-	return content.String()
+}
+
+func isValidRole(role string) bool {
+	validRoles := map[string]bool{
+		"user":      true,
+		"system":    true,
+		"assistant": true,
+	}
+	return validRoles[role]
+}
+
+func normalizeRole(role string) string {
+	if role == "system" {
+		return "user"
+	}
+	return role
+}
+
+func handleUserMessage(content any, duckgoRequest *duckgotypes.ApiRequest) {
+	if arrayContent, ok := content.([]any); ok {
+		parts := buildMessageParts(arrayContent)
+		duckgoRequest.AddMessageUser(parts)
+	} else {
+		duckgoRequest.AddMessageUser(content)
+	}
+}
+
+func handleAssistantMessage(content any, duckgoRequest *duckgotypes.ApiRequest) {
+	parts := []any{}
+	if arrayContent, ok := content.([]any); ok {
+		parts = buildMessageParts(arrayContent)
+	} else {
+		parts = append(parts, duckgotypes.PartText{
+			Type: "text",
+			Text: content.(string),
+		})
+	}
+	duckgoRequest.AddMessageAssistant(parts)
+}
+
+func buildMessageParts(content []any) []any {
+	var parts []any
+	for _, element := range content {
+		if elementMap, ok := element.(map[string]any); ok {
+			part := createPart(elementMap)
+			if part != nil {
+				parts = append(parts, part)
+			}
+		}
+	}
+	return parts
+}
+
+func createPart(elementMap map[string]any) any {
+	switch elementMap["type"] {
+	case "text":
+		return duckgotypes.PartText{
+			Type: "text",
+			Text: elementMap["text"].(string),
+		}
+	case "image_url":
+		return duckgotypes.PartImage{
+			Type:     "image",
+			MimeType: "image/webp",
+			Image:    elementMap["image_url"].(map[string]any)["url"].(string),
+		}
+	default:
+		return nil
+	}
 }

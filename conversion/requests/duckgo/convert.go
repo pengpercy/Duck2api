@@ -3,6 +3,8 @@ package duckgo
 import (
 	duckgotypes "aurora/typings/duckgo"
 	officialtypes "aurora/typings/official"
+	"fmt"
+	"regexp"
 )
 
 func ConvertAPIRequest(apiRequest officialtypes.APIRequest) duckgotypes.ApiRequest {
@@ -88,12 +90,23 @@ func createPart(elementMap map[string]any) any {
 			Text: elementMap["text"].(string),
 		}
 	case "image_url":
+		dataURL := elementMap["image_url"].(map[string]any)["url"].(string)
+		mime, _ := GetMimeType(dataURL)
 		return duckgotypes.PartImage{
 			Type:     "image",
-			MimeType: "image/webp",
-			Image:    elementMap["image_url"].(map[string]any)["url"].(string),
+			MimeType: mime,
+			Image:    dataURL,
 		}
 	default:
 		return nil
 	}
+}
+
+func GetMimeType(dataURL string) (string, error) {
+	re := regexp.MustCompile(`^data:([^;]+)`)
+	matches := re.FindStringSubmatch(dataURL)
+	if len(matches) > 1 {
+		return matches[1], nil
+	}
+	return "", fmt.Errorf("无法提取 MIME 类型")
 }

@@ -146,12 +146,6 @@ func createHeader() httpclient.AuroraHeaders {
 	header.Set("content-type", "application/json")
 	header.Set("origin", "https://duckduckgo.com")
 	header.Set("referer", "https://duckduckgo.com/")
-	header.Set("sec-ch-ua", `"Google Chrome";v="137", "Chromium";v="137", "Not/A)Brand";v="24"`)
-	header.Set("sec-ch-ua-mobile", "?0")
-	header.Set("sec-ch-ua-platform", `"Windows"`)
-	header.Set("sec-fetch-dest", "empty")
-	header.Set("sec-fetch-mode", "cors")
-	header.Set("sec-fetch-site", "same-origin")
 	header.Set("user-agent", UA)
 	return header
 }

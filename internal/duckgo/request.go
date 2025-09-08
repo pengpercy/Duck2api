@@ -57,7 +57,7 @@ func HandleRequestError(c *gin.Context, response *http.Response) bool {
 	} else {
 		// 如果无法解析为 JSON，则返回原始响应体内容
 		c.JSON(response.StatusCode, gin.H{"error": gin.H{
-			"message": "Unknown error from DuckDuckGo API",
+			"message": "Unknown error from upstream API",
 			"type":    "internal_server_error",
 			"details": string(body),
 		}})

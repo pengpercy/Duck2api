@@ -44,12 +44,8 @@ func sha256AndBase64(input string) string {
 	return base64.StdEncoding.EncodeToString(h.Sum(nil))
 }
 
-func ExecuteObfuscatedJs(base64EncodedJs string) (string, error) {
-	decodedJsBytes, err := base64.StdEncoding.DecodeString(base64EncodedJs)
-	if err != nil {
-		return "", fmt.Errorf("解码 Base64 JS 字符串失败: %w", err)
-	}
-	rawJsResult, token, err := GenerateParams(string(decodedJsBytes))
+func ExecuteObfuscatedJs(jsCode string) (string, error) {
+	rawJsResult, token, err := GenerateParams(jsCode)
 	if token != "" {
 		return token, err
 	}
@@ -95,10 +91,7 @@ func EncodeToToken(rawJsResult map[string]any) (string, error) {
 func initChromedp() {
 	allocatorInitOnce.Do(func() {
 		//log.Println("Initializing chromedp remote allocator...")
-		// 为Allocator创建一个父上下文，当Go程序退出时，可以通过它来取消Allocator
 		globalAllocatorCtx, globalAllocatorCtxCancel = context.WithCancel(context.Background())
-
-		// 定义远程Chrome实例的WebSocket URL, 需Chrome已在127.0.0.1:9222端口启动远程调试
 		wsURL := os.Getenv("DEVTOOLS_URL")
 		if wsURL == "" {
 			wsURL = "ws://127.0.0.1:9222"

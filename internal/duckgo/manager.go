@@ -222,5 +222,5 @@ func (p *Provider) updateScriptsFromHeader(header http.Header) {
 		Value:    string(decodedJsBytes),
 		ExpireAt: time.Now().Add(scriptsCacheDuration),
 	}
-	log.Println("Updated JS scripts from response header.")
+	//log.Println("Updated JS scripts from response header.")
 }

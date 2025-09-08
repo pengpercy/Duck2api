@@ -7,7 +7,6 @@ import (
 	"aurora/internal/proxys"
 	officialtypes "aurora/typings/official"
 	"fmt"
-	"log"
 
 	"github.com/gin-gonic/gin"
 )
@@ -36,7 +35,7 @@ func NewHandler(proxy *proxys.IProxy) (*Handler, error) {
 		return nil, fmt.Errorf("failed to create duckgo provider: %w", err)
 	}
 
-	log.Println("DuckDuckGo provider initialized successfully.")
+	//log.Println("DuckDuckGo provider initialized successfully.")
 	return &Handler{
 		duckgoProvider: provider,
 	}, nil

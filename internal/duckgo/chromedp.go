@@ -42,7 +42,7 @@ func initChromedp() (context.CancelFunc, error) {
 		// 使用 RemoteAllocator 连接到 Chrome
 		globalAllocatorCtx, cancel = chromedp.NewRemoteAllocator(allocatorCtx, wsURL)
 
-		log.Printf("Chromedp remote allocator connected to %s", wsURL)
+		//log.Printf("Chromedp remote allocator connected to %s", wsURL)
 
 		// 设置信号处理，以便在接收到中断信号时调用 cancel 函数
 		go setupGracefulShutdown(cancelFunc)

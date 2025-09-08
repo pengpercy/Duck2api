@@ -68,7 +68,7 @@ func (h *Handler) duckduckgo(c *gin.Context) {
 	// Token 获取、缓存、刷新等所有复杂逻辑都在 Provider 内部自动完成。
 	response, err := h.duckgoProvider.PostConversation(translated_request)
 	if err != nil {
-		c.JSON(500, gin.H{"error": "Failed to post conversation to DuckDuckGo: " + err.Error()})
+		c.JSON(500, gin.H{"error": "Failed to post conversation to upstream: " + err.Error()})
 		return
 	}
 	defer response.Body.Close()

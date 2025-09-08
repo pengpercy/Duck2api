@@ -52,7 +52,7 @@ func HandleRequestError(c *gin.Context, response *http.Response) bool {
 		c.JSON(response.StatusCode, gin.H{"error": gin.H{
 			"message": errorResponse["detail"],
 			"type":    response.Status,
-			"code":    "duckgo_error",
+			"code":    "upstream_error",
 		}})
 	} else {
 		// 如果无法解析为 JSON，则返回原始响应体内容

@@ -6,6 +6,7 @@ import (
 	officialtypes "aurora/typings/official"
 	"bufio"
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -21,8 +22,9 @@ import (
 )
 
 var (
-	Token *XqdgToken
-	UA    = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36"
+	Token  *XqdgToken
+	JsCode *Scripts
+	UA     = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36"
 )
 
 type XqdgToken struct {
@@ -40,26 +42,59 @@ func InitXVQD(client httpclient.AuroraHttpClient, proxyUrl string) (*XqdgToken, 
 		}
 		initChromedp()
 	}
-	Token.M.Lock()
-	defer Token.M.Unlock()
 	if Token.Token == "" || Token.ExpireAt.Before(time.Now()) {
-		status, err := postStatus(client, proxyUrl)
+		jsCode, err := getScrits(client, proxyUrl)
 		if err != nil {
 			return Token, err
 		}
-		defer status.Body.Close()
-		return getToken(status.Header)
+		return getToken(jsCode)
 	}
 	return Token, nil
 }
 
-func getToken(header http.Header) (*XqdgToken, error) {
-	xvqdHash1 := header.Get("X-Vqd-Hash-1")
-	if xvqdHash1 == "" {
-		return Token, errors.New("no X-Vqd-Hash-1 token")
+func getScrits(client httpclient.AuroraHttpClient, proxyUrl string) (string, error) {
+	if JsCode == nil {
+		JsCode = &Scripts{
+			Content: "",
+			M:       sync.Mutex{},
+		}
 	}
-	// 调用函数执行 JS 并获取处理后的、Base64 编码的结果。
-	token, err := ExecuteObfuscatedJs(xvqdHash1)
+	if JsCode.Content == "" || JsCode.ExpireAt.Before(time.Now()) {
+		status, err := postStatus(client, proxyUrl)
+		if err != nil {
+			return "", errors.New("no X-Vqd-Hash-1 token")
+		}
+		defer status.Body.Close()
+		jsCode := getScriptsByHeader(status.Header)
+		return jsCode, nil
+	} else {
+		return JsCode.Content, nil
+	}
+}
+
+func setScripts(jsCode string) {
+	if JsCode == nil {
+		JsCode = &Scripts{
+			Content: "",
+			M:       sync.Mutex{},
+		}
+	}
+	JsCode.M.Lock()
+	defer JsCode.M.Unlock()
+	JsCode.Content = jsCode
+	JsCode.ExpireAt = time.Now().Add(time.Hour * 1)
+}
+
+func getScriptsByHeader(header http.Header) string {
+	base64EncodedJs := header.Get("X-Vqd-Hash-1")
+	decodedJsBytes, _ := base64.StdEncoding.DecodeString(base64EncodedJs)
+	jsCode := string(decodedJsBytes)
+	setScripts(jsCode)
+	return jsCode
+}
+
+func getToken(jsCode string) (*XqdgToken, error) {
+	token, err := ExecuteObfuscatedJs(jsCode)
 	if err != nil {
 		log.Fatalf("执行 JavaScript 失败: %v", err)
 	}
@@ -68,6 +103,8 @@ func getToken(header http.Header) (*XqdgToken, error) {
 }
 
 func setToken(token string) {
+	Token.M.Lock()
+	defer Token.M.Unlock()
 	Token.Token = token
 	expiredSecondStr := os.Getenv("EXPIRED_SECOND")
 	expiredSecond := 60 // default value
@@ -109,7 +146,7 @@ func POSTconversation(client httpclient.AuroraHttpClient, request duckgotypes.Ap
 	if err != nil {
 		return nil, err
 	}
-	go getToken(response.Header)
+	go getScriptsByHeader(response.Header)
 	return response, nil
 }
 

@@ -13,7 +13,7 @@
             "env": {
                 "PROXY_URL":"http://127.0.0.1:6152",
                 "DEVTOOLS_URL":"ws://127.0.0.1:9223",
-                "EXPIRED_SECOND":"30"
+                "EXPIRED_SECOND":"10"
             },
             "args": []
         }

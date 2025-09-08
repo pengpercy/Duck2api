@@ -26,7 +26,7 @@ func RegisterRouter() *gin.Engine {
 	// --- 健康检查和基本路由 ---
 	router.GET("/", func(c *gin.Context) {
 		c.JSON(200, gin.H{
-			"message": "Hello, Aurora!",
+			"message": "Hello World!",
 		})
 	})
 

@@ -94,9 +94,9 @@ func (h *Handler) engines(c *gin.Context) {
 	// 此处为了简洁，直接硬编码模型列表。
 	// 在实际应用中，可以考虑从配置或 Provider 中获取。
 	supportedModels := []string{
-		"gpt-3.5-turbo",
-		"claude-3-haiku-20240307",
-		"llama-3-70b-instruct",
+		"gpt-4o-mini",
+		"gpt-5-mini",
+		"claude-3.5-haiku",
 	}
 
 	data := make([]gin.H, len(supportedModels))

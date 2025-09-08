@@ -18,6 +18,8 @@ RUN go build -ldflags "-s -w" -o /app/duck2api .
 # 使用 Alpine Linux 作为最终镜像
 FROM alpine:latest
 
+RUN apk add --no-cache tzdata && ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && echo $TZ > /etc/timezone
+
 # 设置工作目录
 WORKDIR /app
 

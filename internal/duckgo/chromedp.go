@@ -1,6 +1,7 @@
 package duckgo
 
 import (
+	"aurora/logger"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -145,6 +146,7 @@ func executeJS(url, jsCode string, result any) error {
 
 	err := chromedp.Run(execCtx,
 		chromedp.Navigate(url),
+		chromedp.Poll(`document.readyState === "complete" && document.querySelectorAll("#jsa").length > 0`, nil),
 		// 等待页面加载完成，对于 data URI，这通常是瞬间的
 		chromedp.WaitVisible(`body`, chromedp.ByQuery),
 		// 执行 JS 并将结果 unmarshal 到提供的 result 变量中
@@ -190,7 +192,7 @@ func setupGracefulShutdown(cancel context.CancelFunc) {
 
 	go func() {
 		<-c
-		log.Println("Received exit signal, shutting down gracefully...")
+		logger.Infof("Received exit signal, shutting down gracefully...")
 		cancel()
 		// 给一点时间让资源释放
 		time.Sleep(1 * time.Second)

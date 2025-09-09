@@ -5,6 +5,7 @@ import (
 	"aurora/httpclient/bogdanfinn"
 	"aurora/internal/duckgo"
 	"aurora/internal/proxys"
+	"aurora/logger"
 	officialtypes "aurora/typings/official"
 	"fmt"
 
@@ -35,7 +36,7 @@ func NewHandler(proxy *proxys.IProxy) (*Handler, error) {
 		return nil, fmt.Errorf("failed to create duckgo provider: %w", err)
 	}
 
-	//log.Println("DuckDuckGo provider initialized successfully.")
+	logger.Debugf("DuckDuckGo provider initialized successfully.")
 	return &Handler{
 		duckgoProvider: provider,
 	}, nil
@@ -74,7 +75,7 @@ func (h *Handler) duckduckgo(c *gin.Context) {
 	defer response.Body.Close()
 
 	// 使用重构后的错误处理函数
-	if duckgo.HandleRequestError(c, response) {
+	if duckgo.HandleRequestError(c, response, h.duckgoProvider) {
 		return
 	}
 

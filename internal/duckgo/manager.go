@@ -2,6 +2,7 @@ package duckgo
 
 import (
 	"aurora/httpclient"
+	"aurora/logger"
 	duckgotypes "aurora/typings/duckgo"
 	"bytes"
 	"context"
@@ -9,18 +10,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"strconv"
 	"sync"
 	"time"
-)
-
-const (
-	defaultTokenExpiration = 60 * time.Second
-	scriptsCacheDuration   = 1 * time.Hour
-	sandboxCacheDuration   = 24 * time.Hour
 )
 
 // cachedItem 结构体用于存储带有过期时间的数据。
@@ -51,6 +45,21 @@ type Provider struct {
 	sandboxURL   cachedItem[string] // 缓存用于执行 JS 的沙箱环境 URL
 	tokenMutex   sync.Mutex         // 用于保护 token 刷新过程的互斥锁
 	chromeCancel context.CancelFunc // 用于在程序结束时关闭 ChromeDP 上下文
+	// 从环境变量读取的缓存时间
+	tokenExpiration      time.Duration
+	scriptsCacheDuration time.Duration
+	sandboxCacheDuration time.Duration
+}
+
+// getDurationFromEnv 是一个辅助函数，用于从环境变量中安全地读取时间（秒）。
+func getDurationFromEnv(key string, defaultValue time.Duration) time.Duration {
+	valStr := os.Getenv(key)
+	if valStr != "" {
+		if valInt, err := strconv.Atoi(valStr); err == nil && valInt > 0 {
+			return time.Duration(valInt) * time.Second
+		}
+	}
+	return defaultValue
 }
 
 // NewProvider 创建一个新的 Provider 实例。
@@ -65,12 +74,28 @@ func NewProvider(client httpclient.AuroraHttpClient, proxyURL string) (*Provider
 		client:       client,
 		proxyURL:     proxyURL,
 		chromeCancel: cancel,
+		// 初始化缓存时间
+		tokenExpiration:      getDurationFromEnv("TOKEN_EXPIRATION_SECONDS", 60*time.Second),
+		scriptsCacheDuration: getDurationFromEnv("SCRIPTS_CACHE_SECONDS", 3600*time.Second),
+		sandboxCacheDuration: getDurationFromEnv("SANDBOX_CACHE_SECONDS", 86400*time.Second),
 	}, nil
+}
+
+// InvalidateCache 在 API 返回错误时清空所有缓存。
+// 这是线程安全的。
+func (p *Provider) InvalidateCache() {
+	p.tokenMutex.Lock()
+	defer p.tokenMutex.Unlock()
+
+	p.vqdToken = cachedItem[string]{}
+	p.jsCode = cachedItem[string]{}
+	p.sandboxURL = cachedItem[string]{}
+	logger.Warnf("All caches have been invalidated due to an API error.")
 }
 
 // Close 优雅地关闭 Provider 所持有的资源，例如 ChromeDP 连接。
 func (p *Provider) Close() {
-	log.Println("Closing DuckGo Provider resources...")
+	logger.Infof("Closing Provider resources...")
 	p.chromeCancel()
 }
 
@@ -86,7 +111,7 @@ func (p *Provider) GetToken() (string, error) {
 	}
 
 	// 如果 token 无效，则启动完整的刷新流程
-	log.Println("VQD token is invalid or expired, refreshing...")
+	logger.Debugf("VQD token is invalid or expired, refreshing...")
 	return p.refreshToken()
 }
 
@@ -98,43 +123,40 @@ func (p *Provider) refreshToken() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to get sandbox url: %w", err)
 	}
-	p.sandboxURL = cachedItem[string]{Value: sandboxURL, ExpireAt: time.Now().Add(sandboxCacheDuration)}
+	// 使用环境变量配置的缓存时间
+	p.sandboxURL = cachedItem[string]{Value: sandboxURL, ExpireAt: time.Now().Add(p.sandboxCacheDuration)}
 
-	// getSandboxURL 可能会返回一个初始 token，如果可用，直接使用
 	if initialToken != "" {
-		log.Println("Got an initial token from sandbox creation.")
+		logger.Debugf("Got an initial token from sandbox creation.")
 		p.cacheToken(initialToken)
 		return initialToken, nil
 	}
 
-	// 2. 如果没有初始 token，则获取用于生成 token 的 JS 代码
+	// 2. 获取 JS
 	jsCode, err := p.getScripts()
 	if err != nil {
 		return "", fmt.Errorf("failed to get scripts for token generation: %w", err)
 	}
-	p.jsCode = cachedItem[string]{Value: jsCode, ExpireAt: time.Now().Add(scriptsCacheDuration)}
+	// 使用环境变量配置的缓存时间
+	p.jsCode = cachedItem[string]{Value: jsCode, ExpireAt: time.Now().Add(p.scriptsCacheDuration)}
 
-	// 3. 在沙箱环境中执行 JS 以生成新 Token
+	// 3. 生成 Token
 	token, err := p.generateTokenFromJS(jsCode, sandboxURL)
 	if err != nil {
 		return "", fmt.Errorf("failed to execute obfuscated js: %w", err)
 	}
 
 	p.cacheToken(token)
-	log.Println("Successfully refreshed VQD token.")
+	logger.Debugf("Successfully refreshed VQD token.")
 	return token, nil
 }
 
 // cacheToken 将新的 token 存入缓存，并设置过期时间。
 func (p *Provider) cacheToken(token string) {
-	expiredSecondStr := os.Getenv("EXPIRED_SECOND")
-	expiredSecond := defaultTokenExpiration // 默认值
-	if v, err := strconv.Atoi(expiredSecondStr); err == nil && v > 0 {
-		expiredSecond = time.Duration(v) * time.Second
-	}
+	// 使用环境变量配置的缓存时间
 	p.vqdToken = cachedItem[string]{
 		Value:    token,
-		ExpireAt: time.Now().Add(time.Duration(expiredSecond) * time.Second),
+		ExpireAt: time.Now().Add(p.tokenExpiration),
 	}
 }
 
@@ -212,15 +234,16 @@ func (p *Provider) updateScriptsFromHeader(header http.Header) {
 
 	decodedJsBytes, err := base64.StdEncoding.DecodeString(base64EncodedJs)
 	if err != nil {
-		log.Printf("Error decoding new script from header: %v", err)
+		logger.Errorf("Error decoding new script from header: %v", err)
 		return
 	}
 
 	p.tokenMutex.Lock()
 	defer p.tokenMutex.Unlock()
 	p.jsCode = cachedItem[string]{
-		Value:    string(decodedJsBytes),
-		ExpireAt: time.Now().Add(scriptsCacheDuration),
+		Value: string(decodedJsBytes),
+		// 使用环境变量配置的缓存时间
+		ExpireAt: time.Now().Add(p.scriptsCacheDuration),
 	}
-	//log.Println("Updated JS scripts from response header.")
+	logger.Debugf("Updated JS scripts from response header.")
 }

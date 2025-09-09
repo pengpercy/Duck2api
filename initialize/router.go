@@ -1,6 +1,7 @@
 package initialize
 
 import (
+	"aurora/logger"
 	"aurora/middlewares"
 	"log"
 	"os"
@@ -11,7 +12,7 @@ import (
 // RegisterRouter 负责初始化和注册所有路由。
 // 这是应用程序的启动入口。
 func RegisterRouter() *gin.Engine {
-	// 关键改动 1: 正确处理 NewHandler 的初始化错误
+	logger.Init()
 	// NewHandler 现在可能会因为 ChromeDP 连接失败等原因返回错误。
 	// 如果初始化失败，程序必须终止，否则后续请求会因 handler 为 nil 而 panic。
 	handler, err := NewHandler(checkProxy())
@@ -36,7 +37,6 @@ func RegisterRouter() *gin.Engine {
 		})
 	})
 
-	// 关键改动 2: 使用辅助函数注册 API 路由，避免代码重复
 	// registerV1ApiRoutes 封装了所有 /v1 相关的路由注册逻辑。
 	registerV1ApiRoutes := func(rg *gin.RouterGroup) {
 		rg.OPTIONS("/chat/completions", optionsHandler)

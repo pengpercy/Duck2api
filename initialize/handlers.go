@@ -7,6 +7,7 @@ import (
 	"aurora/internal/proxys"
 	"aurora/logger"
 	officialtypes "aurora/typings/official"
+	"encoding/json"
 	"fmt"
 
 	"github.com/gin-gonic/gin"
@@ -36,7 +37,7 @@ func NewHandler(proxy *proxys.IProxy) (*Handler, error) {
 		return nil, fmt.Errorf("failed to create duckgo provider: %w", err)
 	}
 
-	logger.Debugf("DuckDuckGo provider initialized successfully.")
+	logger.Debugf("Provider initialized successfully.")
 	return &Handler{
 		duckgoProvider: provider,
 	}, nil
@@ -61,7 +62,10 @@ func (h *Handler) duckduckgo(c *gin.Context) {
 		}})
 		return
 	}
-
+	bodyJSON, err := json.Marshal(original_request)
+	if err == nil && bodyJSON != nil {
+		logger.Debugf(string(bodyJSON))
+	}
 	// 将 OpenAI 格式的请求转换为 DuckDuckGo 格式
 	translated_request := duckgoConvert.ConvertAPIRequest(original_request)
 

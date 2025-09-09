@@ -31,11 +31,13 @@ func createHeader() httpclient.AuroraHeaders {
 
 // HandleRequestError 负责处理 DuckDuckGo API 返回的非 200 状态码。
 // 它会尝试解析错误详情并以统一的格式返回给客户端。
-func HandleRequestError(c *gin.Context, response *http.Response) bool {
+func HandleRequestError(c *gin.Context, response *http.Response, provider *Provider) bool {
 	if response.StatusCode == http.StatusOK {
 		return false
 	}
 
+	// 关键改动：在处理错误前，调用缓存失效方法
+	provider.InvalidateCache()
 	// 先将响应体完整读入内存，避免重复读取 stream 导致的问题
 	body, err := io.ReadAll(response.Body)
 	if err != nil {

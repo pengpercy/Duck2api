@@ -83,14 +83,11 @@ func (h *Handler) duckduckgo(c *gin.Context) {
 		return
 	}
 
+	// 非流式：一次性读取所有消息片段并聚合成完整响应
+	fullMessage := duckgo.StreamHandler(c, response, translated_request, original_request.Stream)
 	// 根据请求决定是流式响应还是聚合响应
 	if !original_request.Stream {
-		// 非流式：一次性读取所有消息片段并聚合成完整响应
-		fullMessage := duckgo.StreamHandler(c, response, translated_request)
 		c.JSON(200, officialtypes.NewChatCompletionWithModel(fullMessage, translated_request.Model))
-	} else {
-		// 流式：直接将事件流转发给客户端
-		duckgo.StreamHandler(c, response, translated_request)
 	}
 }
 

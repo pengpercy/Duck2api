@@ -70,8 +70,12 @@ func HandleRequestError(c *gin.Context, response *http.Response, provider *Provi
 
 // StreamHandler 处理来自 DuckDuckGo 的 SSE (Server-Sent Events) 流。
 // 它将 DuckDuckGo 的事件流转换为与 OpenAI 兼容的格式。
-func StreamHandler(c *gin.Context, response *http.Response, originalRequest duckgotypes.ApiRequest) string {
-	c.Header("Content-Type", "text/event-stream; charset=utf-8")
+func StreamHandler(c *gin.Context, response *http.Response, originalRequest duckgotypes.ApiRequest, stream bool) string {
+	contentType := "text/event-stream; charset=utf-8"
+	if !stream {
+		contentType = "application/json; charset=utf-8"
+	}
+	c.Header("Content-Type", contentType)
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
 
@@ -96,7 +100,7 @@ func StreamHandler(c *gin.Context, response *http.Response, originalRequest duck
 		data := strings.TrimPrefix(line, "data: ")
 
 		// DuckDuckGo 流以 "[DONE]" 标记结束
-		if strings.HasPrefix(data, "[DONE]") {
+		if stream && strings.HasPrefix(data, "[DONE]") {
 			finalChunk := officialtypes.StopChunkWithModel("stop", originalRequest.Model)
 			c.Writer.WriteString("data: " + finalChunk.String() + "\n\n")
 			c.Writer.Flush()
@@ -116,12 +120,13 @@ func StreamHandler(c *gin.Context, response *http.Response, originalRequest duck
 
 		chunk := officialtypes.NewChatCompletionChunkWithModel(apiResponse.Message, apiResponse.Model)
 		responseString := "data: " + chunk.String() + "\n\n"
-
-		if _, err := c.Writer.WriteString(responseString); err != nil {
-			// 客户端可能已经断开连接
-			break
+		if stream {
+			if _, err := c.Writer.WriteString(responseString); err != nil {
+				// 客户端可能已经断开连接
+				break
+			}
+			c.Writer.Flush()
 		}
-		c.Writer.Flush()
 	}
 
 	return fullMessageBuilder.String()

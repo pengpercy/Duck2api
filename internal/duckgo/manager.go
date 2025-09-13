@@ -111,7 +111,7 @@ func (p *Provider) GetToken() (string, error) {
 	}
 
 	// 如果 token 无效，则启动完整的刷新流程
-	logger.Infof("VQD token is invalid or expired, refreshing...")
+	logger.Infof("Refreshing token...")
 	return p.refreshToken()
 }
 

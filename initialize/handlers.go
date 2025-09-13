@@ -107,7 +107,7 @@ func (h *Handler) engines(c *gin.Context) {
 			"id":       modelID,
 			"object":   "model",
 			"created":  1685474247, // 使用一个固定的时间戳
-			"owned_by": "duckduckgo",
+			"owned_by": "duckai",
 		}
 	}
 

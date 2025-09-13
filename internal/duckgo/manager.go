@@ -182,14 +182,14 @@ func (p *Provider) getScripts() (string, error) {
 		return "", fmt.Errorf("status request failed with code: %d", response.StatusCode)
 	}
 
-	base64EncodedJs := response.Header.Get("X-Vqd-Hash-1")
+	base64EncodedJs := response.Header.Get("x-vqd-hash-1")
 	if base64EncodedJs == "" {
-		return "", errors.New("X-Vqd-Hash-1 header not found in status response")
+		return "", errors.New("x-vqd-hash-1 header not found in status response")
 	}
 
 	decodedJsBytes, err := base64.StdEncoding.DecodeString(base64EncodedJs)
 	if err != nil {
-		return "", fmt.Errorf("failed to decode X-Vqd-Hash-1: %w", err)
+		return "", fmt.Errorf("failed to decode x-vqd-hash-1: %w", err)
 	}
 
 	return string(decodedJsBytes), nil

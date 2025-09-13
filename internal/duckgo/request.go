@@ -118,9 +118,9 @@ func StreamHandler(c *gin.Context, response *http.Response, originalRequest duck
 
 		fullMessageBuilder.WriteString(apiResponse.Message)
 
-		chunk := officialtypes.NewChatCompletionChunkWithModel(apiResponse.Message, apiResponse.Model)
-		responseString := "data: " + chunk.String() + "\n\n"
 		if stream {
+			chunk := officialtypes.NewChatCompletionChunkWithModel(apiResponse.Message, apiResponse.Model)
+			responseString := "data: " + chunk.String() + "\n\n"
 			if _, err := c.Writer.WriteString(responseString); err != nil {
 				// 客户端可能已经断开连接
 				break

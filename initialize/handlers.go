@@ -67,11 +67,11 @@ func (h *Handler) duckduckgo(c *gin.Context) {
 		logger.Debugf(string(bodyJSON))
 	}
 	// 将 OpenAI 格式的请求转换为 DuckDuckGo 格式
-	translated_request := duckgoConvert.ConvertAPIRequest(original_request)
+	translatedRequest := duckgoConvert.ConvertAPIRequest(original_request)
 
 	// 调用 Provider 的方法来处理会话。
 	// Token 获取、缓存、刷新等所有复杂逻辑都在 Provider 内部自动完成。
-	response, err := h.duckgoProvider.PostConversation(translated_request)
+	response, err := h.duckgoProvider.PostConversation(translatedRequest)
 	if err != nil {
 		c.JSON(500, gin.H{"error": "Failed to post conversation to upstream: " + err.Error()})
 		return
@@ -82,12 +82,12 @@ func (h *Handler) duckduckgo(c *gin.Context) {
 	if duckgo.HandleRequestError(c, response, h.duckgoProvider) {
 		return
 	}
-
+	stream := original_request.Stream
 	// 非流式：一次性读取所有消息片段并聚合成完整响应
-	fullMessage := duckgo.StreamHandler(c, response, translated_request, original_request.Stream)
+	fullMessage := duckgo.StreamHandler(c, response, translatedRequest, stream)
 	// 根据请求决定是流式响应还是聚合响应
-	if !original_request.Stream {
-		c.JSON(200, officialtypes.NewChatCompletionWithModel(fullMessage, translated_request.Model))
+	if !stream {
+		c.JSON(200, officialtypes.NewChatCompletionWithModel(fullMessage, translatedRequest.Model))
 	}
 }
 

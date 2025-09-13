@@ -89,6 +89,7 @@ func (p *Provider) getSandboxURL() (string, string, error) {
 		})();
 	`
 
+	logger.Infof("getting sanboxURL from chromedp")
 	initialURL := "https://duckduckgo.com/?q=DuckDuckGo&ia=chat"
 	var result struct {
 		SandboxURL      string         `json:"sandboxUrl"`

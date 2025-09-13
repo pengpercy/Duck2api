@@ -111,7 +111,7 @@ func (p *Provider) GetToken() (string, error) {
 	}
 
 	// 如果 token 无效，则启动完整的刷新流程
-	logger.Debugf("VQD token is invalid or expired, refreshing...")
+	logger.Infof("VQD token is invalid or expired, refreshing...")
 	return p.refreshToken()
 }
 
@@ -127,7 +127,7 @@ func (p *Provider) refreshToken() (string, error) {
 	p.sandboxURL = cachedItem[string]{Value: sandboxURL, ExpireAt: time.Now().Add(p.sandboxCacheDuration)}
 
 	if initialToken != "" {
-		logger.Debugf("Got an initial token from sandbox creation.")
+		logger.Infof("Got an initial token from sandbox creation.")
 		p.cacheToken(initialToken)
 		return initialToken, nil
 	}
@@ -171,6 +171,7 @@ func (p *Provider) getScripts() (string, error) {
 	header.Set("accept", "*/*")
 	header.Set("x-vqd-accept", "1")
 
+	logger.Infof("get scripts from /duckchat/v1/status")
 	response, err := p.client.Request(httpclient.GET, "https://duckduckgo.com/duckchat/v1/status", header, nil, nil)
 	if err != nil {
 		return "", err
@@ -227,7 +228,7 @@ func (p *Provider) PostConversation(request duckgotypes.ApiRequest) (*http.Respo
 
 // updateScriptsFromHeader 从响应头中提取并更新缓存的 JS 代码。
 func (p *Provider) updateScriptsFromHeader(header http.Header) {
-	base64EncodedJs := header.Get("X-Vqd-Hash-1")
+	base64EncodedJs := header.Get("x-vqd-accept")
 	if base64EncodedJs == "" {
 		return
 	}

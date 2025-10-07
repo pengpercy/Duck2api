@@ -171,7 +171,7 @@ func (p *Provider) getScripts() (string, error) {
 	header.Set("accept", "*/*")
 	header.Set("x-vqd-accept", "1")
 
-	logger.Infof("get scripts from /duckchat/v1/status")
+	logger.Infof("Get scripts from /duckchat/v1/status")
 	response, err := p.client.Request(httpclient.GET, "https://duckduckgo.com/duckchat/v1/status", header, nil, nil)
 	if err != nil {
 		return "", err

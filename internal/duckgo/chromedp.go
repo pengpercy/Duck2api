@@ -73,7 +73,7 @@ func EncodeToToken(rawJsResult map[string]any) (string, error) {
 			}
 		}
 		if meta, ok := rawJsResult["meta"].(map[string]any); ok {
-			meta["origin"] = "https://duckduckgo.com"
+			meta["origin"] = "https://duck.ai"
 		}
 	} else {
 		log.Printf("警告: 未找到 client_hashes 数组或长度不足，跳过后处理。")
@@ -133,7 +133,7 @@ func getSanboxUrl() (string, string, error) {
 	defer sanbox.M.Unlock()
 	if sanbox.Url == "" || sanbox.ExpireAt.Before(time.Now()) {
 		jsCode := `const base64DecodeUnicode = str => decodeURIComponent(atob(str).split('').map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join('')); const executeHeaderCode = async () => { try { const response = await fetch('https://duckduckgo.com/duckchat/v1/status', { credentials: 'include', headers: { 'x-vqd-accept': '1' } }); const hash = response.headers.get('X-Vqd-Hash-1'); if (!hash) throw new Error('Header X-Vqd-Hash-1 not found.'); return eval(base64DecodeUnicode(hash)); } catch (error) { console.error('Error:', error); throw error; } }; (async function () { return { "url": 'data:text/html;charset=utf-8,' + encodeURIComponent(window.top.document.documentElement.outerHTML), "jsResult": await executeHeaderCode() }; })();`
-		url := "https://duckduckgo.com/?q=DuckDuckGo&ia=chat"
+		url := "https://duck.ai"
 		rawJsResult, err := ExecuteJS(jsCode, url)
 		if err != nil {
 			return "", "", err

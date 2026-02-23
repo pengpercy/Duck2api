@@ -123,7 +123,7 @@ func postStatus(client httpclient.AuroraHttpClient, proxyUrl string) (*http.Resp
 	header := createHeader()
 	header.Set("accept", "*/*")
 	header.Set("x-vqd-accept", "1")
-	response, err := client.Request(httpclient.GET, "https://duckduckgo.com/duckchat/v1/status", header, nil, nil)
+	response, err := client.Request(httpclient.GET, "https://duck.ai/duckchat/v1/status", header, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -142,7 +142,7 @@ func POSTconversation(client httpclient.AuroraHttpClient, request duckgotypes.Ap
 	header.Set("accept", "text/event-stream")
 	header.Set("x-vqd-hash-1", token)
 	// fmt.Println(string(body_json))
-	response, err := client.Request(httpclient.POST, "https://duckduckgo.com/duckchat/v1/chat", header, nil, bytes.NewBuffer(body_json))
+	response, err := client.Request(httpclient.POST, "https://duck.ai/duckchat/v1/chat", header, nil, bytes.NewBuffer(body_json))
 	if err != nil {
 		return nil, err
 	}
@@ -182,8 +182,8 @@ func createHeader() httpclient.AuroraHeaders {
 	header := make(httpclient.AuroraHeaders)
 	header.Set("accept-language", "zh-CN,zh;q=0.9")
 	header.Set("content-type", "application/json")
-	header.Set("origin", "https://duckduckgo.com")
-	header.Set("referer", "https://duckduckgo.com/")
+	header.Set("origin", "https://duck.ai")
+	header.Set("referer", "https://duck.ai/")
 	header.Set("user-agent", UA)
 	return header
 }

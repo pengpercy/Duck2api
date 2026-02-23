@@ -73,7 +73,7 @@ func (p *Provider) getSandboxURL() (string, string, error) {
 			const base64DecodeUnicode = str => decodeURIComponent(atob(str).split('').map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join(''));
 			const executeHeaderCode = async () => {
 				try {
-					const response = await fetch('https://duckduckgo.com/duckchat/v1/status', { credentials: 'include', headers: { 'x-vqd-accept': '1' } });
+					const response = await fetch('https://duck.ai/duckchat/v1/status', { credentials: 'include', headers: { 'x-vqd-accept': '1' } });
 					const hash = response.headers.get('X-Vqd-Hash-1');
 					if (!hash) throw new Error('Header X-Vqd-Hash-1 not found.');
 					return eval(base64DecodeUnicode(hash));
@@ -90,7 +90,7 @@ func (p *Provider) getSandboxURL() (string, string, error) {
 	`
 
 	logger.Infof("getting sanboxURL from chromedp")
-	initialURL := "https://duckduckgo.com/?q=DuckDuckGo&ia=chat"
+	initialURL := "https://duck.ai/"
 	var result struct {
 		SandboxURL      string         `json:"sandboxUrl"`
 		InitialJSResult map[string]any `json:"initialJsResult"`
@@ -168,7 +168,7 @@ func encodeToToken(rawJsResult map[string]any) (string, error) {
 			}
 		}
 		if meta, ok := rawJsResult["meta"].(map[string]any); ok {
-			meta["origin"] = "https://duckduckgo.com"
+			meta["origin"] = "https://duck.ai"
 		}
 	}
 

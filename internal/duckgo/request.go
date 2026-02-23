@@ -23,8 +23,8 @@ func createHeader() httpclient.AuroraHeaders {
 	header := make(httpclient.AuroraHeaders)
 	header.Set("accept-language", "zh-CN,zh;q=0.9")
 	header.Set("content-type", "application/json")
-	header.Set("origin", "https://duckduckgo.com")
-	header.Set("referer", "https://duckduckgo.com/")
+	header.Set("origin", "https://duck.ai")
+	header.Set("referer", "https://duck.ai/")
 	header.Set("user-agent", UA)
 	return header
 }

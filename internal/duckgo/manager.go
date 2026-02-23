@@ -107,6 +107,7 @@ func (p *Provider) GetToken() (string, error) {
 	defer p.tokenMutex.Unlock()
 
 	if p.vqdToken.isValid() {
+		// p.getScripts(false)
 		return p.vqdToken.Value, nil
 	}
 
@@ -133,7 +134,7 @@ func (p *Provider) refreshToken() (string, error) {
 	}
 
 	// 2. 获取 JS
-	jsCode, err := p.getScripts()
+	jsCode, err := p.getScripts(true)
 	if err != nil {
 		return "", fmt.Errorf("failed to get scripts for token generation: %w", err)
 	}
@@ -162,17 +163,19 @@ func (p *Provider) cacheToken(token string) {
 
 // getScripts 从 DuckDuckGo status 接口获取用于生成 token 的 JS 代码。
 // 它会优先使用缓存。
-func (p *Provider) getScripts() (string, error) {
+func (p *Provider) getScripts(fresh bool) (string, error) {
 	if p.jsCode.isValid() {
 		return p.jsCode.Value, nil
 	}
 
 	header := createHeader()
 	header.Set("accept", "*/*")
-	header.Set("x-vqd-accept", "1")
+	if fresh {
+		header.Set("x-vqd-accept", "1")
+	}
 
 	logger.Infof("Get scripts from /duckchat/v1/status")
-	response, err := p.client.Request(httpclient.GET, "https://duckduckgo.com/duckchat/v1/status", header, nil, nil)
+	response, err := p.client.Request(httpclient.GET, "https://duck.ai/duckchat/v1/status", header, nil, nil)
 	if err != nil {
 		return "", err
 	}
@@ -181,9 +184,12 @@ func (p *Provider) getScripts() (string, error) {
 	if response.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("status request failed with code: %d", response.StatusCode)
 	}
+	if !fresh {
+		return "PreValidate Successf", nil
+	}
 
 	base64EncodedJs := response.Header.Get("x-vqd-hash-1")
-	if base64EncodedJs == "" {
+	if base64EncodedJs == "" && fresh {
 		return "", errors.New("x-vqd-hash-1 header not found in status response")
 	}
 
@@ -215,7 +221,7 @@ func (p *Provider) PostConversation(request duckgotypes.ApiRequest) (*http.Respo
 	header.Set("accept", "text/event-stream")
 	header.Set("x-vqd-hash-1", token)
 
-	response, err := p.client.Request(httpclient.POST, "https://duckduckgo.com/duckchat/v1/chat", header, nil, bytes.NewBuffer(bodyJSON))
+	response, err := p.client.Request(httpclient.POST, "https://duck.ai/duckchat/v1/chat", header, nil, bytes.NewBuffer(bodyJSON))
 	if err != nil {
 		return nil, err
 	}

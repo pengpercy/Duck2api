@@ -5,112 +5,114 @@ import (
 	"aurora/httpclient/bogdanfinn"
 	"aurora/internal/duckgo"
 	"aurora/internal/proxys"
+	"aurora/logger"
 	officialtypes "aurora/typings/official"
+	"encoding/json"
+	"fmt"
 
 	"github.com/gin-gonic/gin"
 )
 
+// Handler 结构体现在直接依赖于 duckgo.Provider。
+// Provider 封装了所有与 DuckDuckGo API 交互的复杂逻辑，
+// 包括 HTTP 客户端、代理、以及 Token 的获取和缓存。
 type Handler struct {
-	proxy *proxys.IProxy
+	duckgoProvider *duckgo.Provider
 }
 
-func NewHandle(proxy *proxys.IProxy) *Handler {
-	return &Handler{proxy: proxy}
+// NewHandler 是 Handler 的构造函数。
+// 它负责初始化所有必要的依赖，包括 HTTP 客户端和核心的 duckgo.Provider。
+// 由于 Provider 的初始化（特别是 ChromeDP）可能会失败，因此该函数返回一个 error。
+func NewHandler(proxy *proxys.IProxy) (*Handler, error) {
+	// 1. 获取代理地址
+	proxyUrl := proxy.GetProxyIP()
+
+	// 2. 创建一个长生命周期的 HTTP 客户端
+	client := bogdanfinn.NewStdClient()
+
+	// 3. 初始化 duckgo.Provider
+	// Provider 将管理客户端、代理和 Token 的所有状态
+	provider, err := duckgo.NewProvider(client, proxyUrl)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create duckgo provider: %w", err)
+	}
+
+	logger.Debugf("Provider initialized successfully.")
+	return &Handler{
+		duckgoProvider: provider,
+	}, nil
 }
 
+// optionsHandler 处理浏览器的 CORS 预检请求。
 func optionsHandler(c *gin.Context) {
-	// Set headers for CORS
 	c.Header("Access-Control-Allow-Origin", "*")
-	c.Header("Access-Control-Allow-Methods", "POST")
-	c.Header("Access-Control-Allow-Headers", "*")
-	c.JSON(200, gin.H{
-		"message": "pong",
-	})
+	c.Header("Access-Control-Allow-Methods", "POST, OPTIONS")
+	c.Header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+	c.JSON(200, gin.H{"status": "ok"})
 }
 
+// duckduckgo 是处理聊天请求的核心处理器。
+// 它的职责被大大简化：解析请求 -> 调用 Provider -> 格式化响应。
 func (h *Handler) duckduckgo(c *gin.Context) {
 	var original_request officialtypes.APIRequest
-	err := c.BindJSON(&original_request)
-	if err != nil {
+	if err := c.BindJSON(&original_request); err != nil {
 		c.JSON(400, gin.H{"error": gin.H{
-			"message": "Request must be proper JSON",
+			"message": "Request body is invalid JSON",
 			"type":    "invalid_request_error",
-			"param":   nil,
-			"code":    err.Error(),
 		}})
 		return
 	}
-	proxyUrl := h.proxy.GetProxyIP()
-	client := bogdanfinn.NewStdClient()
-	token, err := duckgo.InitXVQD(client, proxyUrl)
+	bodyJSON, err := json.Marshal(original_request)
+	if err == nil && bodyJSON != nil {
+		logger.Debugf(string(bodyJSON))
+	}
+	// 将 OpenAI 格式的请求转换为 DuckDuckGo 格式
+	translatedRequest := duckgoConvert.ConvertAPIRequest(original_request)
+
+	// 调用 Provider 的方法来处理会话。
+	// Token 获取、缓存、刷新等所有复杂逻辑都在 Provider 内部自动完成。
+	response, err := h.duckgoProvider.PostConversation(translatedRequest)
 	if err != nil {
-		c.JSON(500, gin.H{
-			"error": err.Error(),
-		})
+		c.JSON(500, gin.H{"error": "Failed to post conversation to upstream: " + err.Error()})
 		return
 	}
-
-	translated_request := duckgoConvert.ConvertAPIRequest(original_request)
-	response, err := duckgo.POSTconversation(client, translated_request, token.Token, proxyUrl)
-	if err != nil {
-		c.JSON(500, gin.H{
-			"error": "request conversion error",
-		})
-		return
-	}
-
 	defer response.Body.Close()
-	if duckgo.Handle_request_error(c, response) {
+
+	// 使用重构后的错误处理函数
+	if duckgo.HandleRequestError(c, response, h.duckgoProvider) {
 		return
 	}
-	var response_part string
-	response_part = duckgo.Handler(c, response, translated_request, original_request.Stream)
-	if c.Writer.Status() != 200 {
-		return
-	}
-	if !original_request.Stream {
-		c.JSON(200, officialtypes.NewChatCompletionWithModel(response_part, translated_request.Model))
-	} else {
-		c.String(200, "data: [DONE]\n\n")
+	stream := original_request.Stream
+	// 非流式：一次性读取所有消息片段并聚合成完整响应
+	fullMessage := duckgo.StreamHandler(c, response, translatedRequest, stream)
+	// 根据请求决定是流式响应还是聚合响应
+	if !stream {
+		c.JSON(200, officialtypes.NewChatCompletionWithModel(fullMessage, translatedRequest.Model))
 	}
 }
 
+// engines 返回支持的模型列表。
 func (h *Handler) engines(c *gin.Context) {
-	type ResData struct {
-		ID      string `json:"id"`
-		Object  string `json:"object"`
-		Created int    `json:"created"`
-		OwnedBy string `json:"owned_by"`
-	}
-
-	type JSONData struct {
-		Object string    `json:"object"`
-		Data   []ResData `json:"data"`
-	}
-
-	modelS := JSONData{
-		Object: "list",
-	}
-	var resModelList []ResData
-
-	// Supported models
-	modelIDs := []string{
+	// 此处为了简洁，直接硬编码模型列表。
+	// 在实际应用中，可以考虑从配置或 Provider 中获取。
+	supportedModels := []string{
 		"gpt-4o-mini",
-		"o4-mini",
-		"claude-3-haiku-20240307",
-		"meta-llama/Llama-3.3-70B-Instruct-Turbo",
-		"mistralai/Mistral-Small-24B-Instruct-2501",
+		"gpt-5-mini",
+		"claude-3.5-haiku",
 	}
 
-	for _, modelID := range modelIDs {
-		resModelList = append(resModelList, ResData{
-			ID:      modelID,
-			Object:  "model",
-			Created: 1685474247,
-			OwnedBy: "duckduckgo",
-		})
+	data := make([]gin.H, len(supportedModels))
+	for i, modelID := range supportedModels {
+		data[i] = gin.H{
+			"id":       modelID,
+			"object":   "model",
+			"created":  1685474247, // 使用一个固定的时间戳
+			"owned_by": "duckai",
+		}
 	}
 
-	modelS.Data = resModelList
-	c.JSON(200, modelS)
+	c.JSON(200, gin.H{
+		"object": "list",
+		"data":   data,
+	})
 }

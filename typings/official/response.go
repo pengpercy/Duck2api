@@ -18,7 +18,7 @@ func (chunk *ChatCompletionChunk) String() string {
 type Choices struct {
 	Delta        Delta       `json:"delta"`
 	Index        int         `json:"index"`
-	FinishReason interface{} `json:"finish_reason"`
+	FinishReason any 		 `json:"finish_reason"`
 }
 
 type Delta struct {

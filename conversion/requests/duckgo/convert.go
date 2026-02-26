@@ -16,6 +16,13 @@ func ConvertAPIRequest(apiRequest officialtypes.APIRequest) duckgotypes.ApiReque
 
 func buildMessage(apiRequest *officialtypes.APIRequest, duckgoRequest *duckgotypes.ApiRequest) {
 	duckgoRequest.CanUseTools = true
+	duckgoRequest.ReasoningEffort = "minimal"
+	duckgoRequest.Metadata.ToolChoice = duckgotypes.Tool{
+		LocalSearch:     false,
+		NewsSearch:      false,
+		VideosSearch:    false,
+		WeatherForecast: false,
+	}
 	for _, msg := range apiRequest.Messages {
 		if !isValidRole(msg.Role) {
 			continue
@@ -33,6 +40,7 @@ func buildMessage(apiRequest *officialtypes.APIRequest, duckgoRequest *duckgotyp
 
 func isValidRole(role string) bool {
 	validRoles := map[string]bool{
+		"developer": true,
 		"user":      true,
 		"system":    true,
 		"assistant": true,
@@ -41,7 +49,7 @@ func isValidRole(role string) bool {
 }
 
 func normalizeRole(role string) string {
-	if role == "system" {
+	if role == "system" || role == "developer" {
 		return "user"
 	}
 	return role

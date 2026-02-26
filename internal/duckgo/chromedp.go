@@ -132,7 +132,7 @@ func getSanboxUrl() (string, string, error) {
 	sanbox.M.Lock()
 	defer sanbox.M.Unlock()
 	if sanbox.Url == "" || sanbox.ExpireAt.Before(time.Now()) {
-		jsCode := `const base64DecodeUnicode = str => decodeURIComponent(atob(str).split('').map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join('')); const executeHeaderCode = async () => { try { const response = await fetch('https://duckduckgo.com/duckchat/v1/status', { credentials: 'include', headers: { 'x-vqd-accept': '1' } }); const hash = response.headers.get('X-Vqd-Hash-1'); if (!hash) throw new Error('Header X-Vqd-Hash-1 not found.'); return eval(base64DecodeUnicode(hash)); } catch (error) { console.error('Error:', error); throw error; } }; (async function () { return { "url": 'data:text/html;charset=utf-8,' + encodeURIComponent(window.top.document.documentElement.outerHTML), "jsResult": await executeHeaderCode() }; })();`
+		jsCode := `const base64DecodeUnicode = str => decodeURIComponent(atob(str).split('').map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join('')); const executeHeaderCode = async () => { try { const response = await fetch('https://duck.ai/duckchat/v1/status', { credentials: 'include', headers: { 'x-vqd-accept': '1' } }); const hash = response.headers.get('X-Vqd-Hash-1'); if (!hash) throw new Error('Header X-Vqd-Hash-1 not found.'); return eval(base64DecodeUnicode(hash)); } catch (error) { console.error('Error:', error); throw error; } }; (async function () { return { "url": 'data:text/html;charset=utf-8,' + encodeURIComponent(window.top.document.documentElement.outerHTML), "jsResult": await executeHeaderCode() }; })();`
 		url := "https://duck.ai"
 		rawJsResult, err := ExecuteJS(jsCode, url)
 		if err != nil {

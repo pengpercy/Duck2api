@@ -1,10 +1,12 @@
 package duckgo
 
 type ApiRequest struct {
-	Model       string   `json:"model"`
-	Messages    []any    `json:"messages"`
-	CanUseTools bool     `json:"canUseTools"`
-	Metadata    metadata `json:"metadata"`
+	Model                string   `json:"model"`
+	Messages             []any    `json:"messages"`
+	CanUseTools          bool     `json:"canUseTools"`
+	CanUseApproxLocation bool     `json:"canUseApproxLocation"`
+	Metadata             Metadata `json:"metadata"`
+	ReasoningEffort      string   `json:"reasoningEffort"`
 }
 
 type messages struct {
@@ -12,7 +14,15 @@ type messages struct {
 	Content any    `json:"content"`
 }
 
-type metadata struct {
+type Metadata struct {
+	ToolChoice Tool `json:"toolChoice"`
+}
+
+type Tool struct {
+	LocalSearch     bool `json:"LocalSearch"`
+	NewsSearch      bool `json:"NewsSearch"`
+	VideosSearch    bool `json:"VideosSearch"`
+	WeatherForecast bool `json:"WeatherForecast"`
 }
 
 type MessageUser struct {

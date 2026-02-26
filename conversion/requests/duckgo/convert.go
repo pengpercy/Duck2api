@@ -16,6 +16,13 @@ func ConvertAPIRequest(apiRequest officialtypes.APIRequest) duckgotypes.ApiReque
 
 func buildMessage(apiRequest *officialtypes.APIRequest, duckgoRequest *duckgotypes.ApiRequest) {
 	duckgoRequest.CanUseTools = true
+	duckgoRequest.ReasoningEffort = "minimal"
+	duckgoRequest.Metadata.ToolChoice = duckgotypes.Tool{
+		LocalSearch:     false,
+		NewsSearch:      false,
+		VideosSearch:    false,
+		WeatherForecast: false,
+	}
 	for _, msg := range apiRequest.Messages {
 		if !isValidRole(msg.Role) {
 			continue

@@ -201,7 +201,7 @@ func (p *Provider) getScripts(fresh bool) (string, error) {
 	return string(decodedJsBytes), nil
 }
 
-// PostConversation 发送聊天请求到 DuckDuckGo API。
+// PostConversation 发送聊天请求到 DuckAI API。
 func (p *Provider) PostConversation(request duckgotypes.ApiRequest) (*http.Response, error) {
 	token, err := p.GetToken()
 	if err != nil {

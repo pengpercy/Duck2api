@@ -11,9 +11,16 @@ on:
 env:
   GHCR_REPO: ghcr.io/pengpercy/duck2api
 
+concurrency:
+  group: docker-build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   main:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -35,11 +42,11 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          platforms: linux/amd64,linux/arm64/v8
           file: Dockerfile
+          platforms: linux/amd64,linux/arm64/v8
           push: true
           tags: |
             ${{ env.GHCR_REPO }}:latest
             ${{ env.GHCR_REPO }}:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=ghcr
+          cache-to: type=gha,mode=max,scope=ghcr

@@ -98,7 +98,7 @@ func (h *Handler) engines(c *gin.Context) {
 	supportedModels := []string{
 		"gpt-4o-mini",
 		"gpt-5-mini",
-		"claude-3.5-haiku",
+		"claude-haiku-4-5",
 	}
 
 	data := make([]gin.H, len(supportedModels))

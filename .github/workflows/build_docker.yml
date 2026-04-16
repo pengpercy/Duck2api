@@ -46,7 +46,7 @@ jobs:
 
       - name: Build and push by digest
         id: build
-        uses: docker/build-push-action@v7.0.1
+        uses: docker/build-push-action@v7.1.0
         with:
           context: .
           file: Dockerfile

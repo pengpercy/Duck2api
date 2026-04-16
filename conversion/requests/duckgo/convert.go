@@ -5,6 +5,7 @@ import (
 	officialtypes "aurora/typings/official"
 	"fmt"
 	"regexp"
+	"strings"
 )
 
 func ConvertAPIRequest(apiRequest officialtypes.APIRequest) duckgotypes.ApiRequest {
@@ -17,6 +18,9 @@ func ConvertAPIRequest(apiRequest officialtypes.APIRequest) duckgotypes.ApiReque
 func buildMessage(apiRequest *officialtypes.APIRequest, duckgoRequest *duckgotypes.ApiRequest) {
 	duckgoRequest.CanUseTools = true
 	duckgoRequest.ReasoningEffort = "minimal"
+	if strings.HasPrefix(duckgoRequest.Model, "claude") {
+		duckgoRequest.ReasoningEffort = "none"
+	}
 	duckgoRequest.Metadata.ToolChoice = duckgotypes.Tool{
 		LocalSearch:     false,
 		NewsSearch:      false,

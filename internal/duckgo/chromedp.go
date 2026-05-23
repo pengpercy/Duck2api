@@ -11,9 +11,11 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
@@ -148,6 +150,7 @@ func executeJS(url, jsCode string, result any) error {
 	err := chromedp.Run(execCtx,
 		chromedp.Navigate(url),
 		chromedp.Poll(`document.readyState === "complete" && document.querySelectorAll("#jsa").length > 0`, nil),
+		// chromedp.Click("button[data-testid='DUCKAI_ONBOARDING_AGREE']"),
 		// 等待页面加载完成，对于 data URI，这通常是瞬间的
 		chromedp.WaitVisible(`body`, chromedp.ByQuery),
 		// 执行 JS 并将结果 unmarshal 到提供的 result 变量中
@@ -169,6 +172,11 @@ func encodeToToken(rawJsResult map[string]any) (string, error) {
 		}
 		if meta, ok := rawJsResult["meta"].(map[string]any); ok {
 			meta["origin"] = "https://duck.ai"
+			meta["duration"] = "19"
+			meta["debug"] = "\u0019\u001c"
+			// if debug, ok := meta["debug"].(string); ok {
+			// 	meta["debug"] = "\u0019\u001c"
+			// }
 		}
 	}
 
@@ -177,6 +185,25 @@ func encodeToToken(rawJsResult map[string]any) (string, error) {
 		return "", fmt.Errorf("failed to serialize final JSON result: %w", err)
 	}
 	return base64.StdEncoding.EncodeToString(finalJsonBytes), nil
+}
+
+func asciiEscape(s string) string {
+	var b strings.Builder
+	for len(s) > 0 {
+		r, size := utf8.DecodeRuneInString(s)
+		s = s[size:]
+		if r <= 0x7f {
+			b.WriteRune(r)
+		} else {
+			// 写成 \uXXXX 或 \UXXXXXXXX（根据需要）
+			if r <= 0xffff {
+				fmt.Fprintf(&b, "\\u%04x", r)
+			} else {
+				fmt.Fprintf(&b, "\\U%08x", r)
+			}
+		}
+	}
+	return b.String()
 }
 
 // sha256AndBase64 是一个加密辅助函数。

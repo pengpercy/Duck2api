@@ -37,14 +37,7 @@ func NewStdClient() *RestyClient {
 		SetHeader("accept-language", "en-US,en;q=0.9").
 		SetHeader("cache-control", "no-cache").
 		SetHeader("content-type", "application/json").
-		SetHeader("oai-language", util.RandomLanguage()).
-		SetHeader("pragma", "no-cache").
-		SetHeader("sec-ch-ua", `"Google Chrome";v="123", "Not:A-Brand";v="8", "Chromium";v="123"`).
-		SetHeader("sec-ch-ua-mobile", "?0").
-		SetHeader("sec-ch-ua-platform", "Windows").
-		SetHeader("sec-fetch-dest", "empty").
-		SetHeader("sec-fetch-mode", "cors").
-		SetHeader("sec-fetch-site", "same-origin")
+		SetHeader("oai-language", util.RandomLanguage())
 	return client
 }
 

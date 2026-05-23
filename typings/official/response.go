@@ -107,7 +107,7 @@ type Msg struct {
 type Choice struct {
 	Index        int         `json:"index"`
 	Message      Msg         `json:"message"`
-	FinishReason interface{} `json:"finish_reason"`
+	FinishReason any `json:"finish_reason"`
 }
 type usage struct {
 	PromptTokens     int `json:"prompt_tokens"`

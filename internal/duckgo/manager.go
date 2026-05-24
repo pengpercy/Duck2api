@@ -56,7 +56,6 @@ type Provider struct {
 	browserListenerAttached bool
 	browserRefreshInFlight  bool
 	browserRequestHeadersCh chan network.Headers
-	browserResponseCh       chan browserChatResult
 	feVersion               string
 	// 从环境变量读取的缓存时间
 	tokenExpiration      time.Duration

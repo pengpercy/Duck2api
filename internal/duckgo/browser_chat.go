@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -18,26 +17,13 @@ import (
 	"github.com/chromedp/chromedp"
 )
 
-type browserChatResult struct {
-	status         int64
-	headers        network.Headers
-	requestHeaders network.Headers
-	body           string
-}
-
 type browserTokenState struct {
 	headers httpclient.AuroraHeaders
 }
 
-// PostConversationViaBrowser sends the prompt through the real duck.ai page and
-// captures the browser's /duckchat/v1/chat response. This avoids reimplementing
-// Duck.ai's moving challenge/token logic in Go.
+// PostConversationViaBrowser uses the browser only for token/challenge handling.
+// The actual user chat request is always sent through Go so upstream SSE can pass through.
 func (p *Provider) PostConversationViaBrowser(request duckgotypes.ApiRequest) (*http.Response, error) {
-	prompt, err := latestUserPrompt(request)
-	if err != nil {
-		return nil, err
-	}
-
 	p.browserMutex.Lock()
 	defer p.browserMutex.Unlock()
 
@@ -52,22 +38,10 @@ func (p *Provider) PostConversationViaBrowser(request duckgotypes.ApiRequest) (*
 		p.browserToken = cachedItem[browserTokenState]{}
 	}
 
-	result, err := p.runBrowserChat(prompt, request.Model)
-	if err != nil {
+	if err := p.refreshBrowserToken(); err != nil {
 		return nil, err
 	}
-	p.cacheBrowserToken(result.requestHeaders)
-
-	resp := &http.Response{
-		StatusCode: int(result.status),
-		Status:     fmt.Sprintf("%d %s", result.status, http.StatusText(int(result.status))),
-		Header:     browserHeadersToHTTP(result.headers),
-		Body:       io.NopCloser(strings.NewReader(result.body)),
-	}
-	if resp.Header.Get("Content-Type") == "" {
-		resp.Header.Set("Content-Type", "text/event-stream")
-	}
-	return resp, nil
+	return p.postConversationWithBrowserToken(request)
 }
 
 func (p *Provider) prewarmBrowserToken() {
@@ -250,7 +224,6 @@ func (p *Provider) ensureBrowserPage(ctx context.Context) error {
 			p.browserCancel = nil
 			p.browserListenerAttached = false
 			p.browserRequestHeadersCh = nil
-			p.browserResponseCh = nil
 		} else {
 			return nil
 		}
@@ -284,19 +257,6 @@ func (p *Provider) attachBrowserListener() {
 			if ch := p.browserRequestHeadersCh; ch != nil {
 				select {
 				case ch <- e.Request.Headers:
-				default:
-				}
-			}
-		case *network.EventResponseReceived:
-			if !strings.Contains(e.Response.URL, "/duckchat/v1/chat") {
-				return
-			}
-			if ch := p.browserResponseCh; ch != nil {
-				select {
-				case ch <- browserChatResult{
-					status:  int64(e.Response.Status),
-					headers: e.Response.Headers,
-				}:
 				default:
 				}
 			}
@@ -428,26 +388,6 @@ func (p *Provider) scheduleBrowserTokenRefreshLocked() {
 	}()
 }
 
-func (p *Provider) runBrowserChat(prompt, model string) (*browserChatResult, error) {
-	result, err := p.runBrowserRequest(prompt)
-	if err != nil {
-		return nil, err
-	}
-	if result.status != http.StatusOK {
-		result.body = fmt.Sprintf(`{"action":"error","status":%d,"type":"ERR_BROWSER_CHAT"}`, result.status)
-		return result, nil
-	}
-	runCtx := p.browserCtx
-	var answer string
-	if err := chromedp.Run(runCtx, chromedp.Evaluate(waitAssistantTextJS(prompt), &answer, func(p *runtime.EvaluateParams) *runtime.EvaluateParams {
-		return p.WithAwaitPromise(true)
-	})); err != nil {
-		return nil, err
-	}
-	result.body = synthesizeDuckSSE(answer, model)
-	return result, nil
-}
-
 func (p *Provider) runBrowserSeed(prompt string) (network.Headers, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -474,47 +414,6 @@ func (p *Provider) runBrowserSeed(prompt string) (network.Headers, error) {
 	case <-time.After(10 * time.Second):
 		return nil, errors.New("timed out waiting for browser seed request")
 	}
-}
-
-func (p *Provider) runBrowserRequest(prompt string) (*browserChatResult, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	if err := p.ensureBrowserPage(ctx); err != nil {
-		return nil, err
-	}
-
-	runCtx := p.browserCtx
-
-	statuses := make(chan browserChatResult, 1)
-	requestHeaders := make(chan network.Headers, 1)
-	p.browserRequestHeadersCh = requestHeaders
-	p.browserResponseCh = statuses
-	defer func() {
-		p.browserRequestHeadersCh = nil
-		p.browserResponseCh = nil
-	}()
-
-	if err := chromedp.Run(runCtx,
-		prepareNewChat(),
-		sendPrompt(prompt),
-	); err != nil {
-		return nil, err
-	}
-
-	result := &browserChatResult{}
-	select {
-	case status := <-statuses:
-		result.status = status.status
-		result.headers = status.headers
-	case <-time.After(30 * time.Second):
-		return nil, errors.New("timed out waiting for browser chat request")
-	}
-	select {
-	case result.requestHeaders = <-requestHeaders:
-	default:
-	}
-	return result, nil
 }
 
 func prepareNewChat() chromedp.Action {
@@ -594,66 +493,4 @@ func sendPrompt(prompt string) chromedp.Action {
 		chromedp.Sleep(100 * time.Millisecond),
 		chromedp.Evaluate(submitJS, nil),
 	}
-}
-
-func browserHeadersToHTTP(headers network.Headers) http.Header {
-	out := http.Header{}
-	for key, value := range headers {
-		switch v := value.(type) {
-		case string:
-			out.Set(key, v)
-		default:
-			data, _ := json.Marshal(v)
-			out.Set(key, string(data))
-		}
-	}
-	return out
-}
-
-func waitAssistantTextJS(prompt string) string {
-	promptJSON, _ := json.Marshal(prompt)
-	return fmt.Sprintf(`(async () => {
-		const prompt = %s;
-		const sleep = ms => new Promise(r => setTimeout(r, ms));
-		const clean = text => text
-			.split('\n')
-			.map(s => s.trim())
-			.filter(Boolean)
-			.filter(s => ![
-				'Ask anything', 'Search', 'Send', 'New Chat', 'Recent Chats',
-				'Upgrade', 'Settings', 'Stop generating', 'GPT-5 mini', '私密',
-				'工具', '快速', '·', '所有聊天记录均为私密。人工智能可能会出错。',
-				'正在生成回复', 'Generating response'
-			].includes(s))
-			.filter(s => !/^GPT-\d/i.test(s))
-			.join('\n')
-			.trim();
-		let last = '';
-		let stable = 0;
-		for (let i = 0; i < 450; i++) {
-			const text = document.body.innerText || '';
-			const idx = text.lastIndexOf(prompt);
-			if (idx >= 0) {
-				const tail = clean(text.slice(idx + prompt.length));
-				if (tail.length > 0) {
-					if (tail === last) stable++;
-					else {
-						last = tail;
-						stable = 0;
-					}
-					if (stable >= 5) return tail;
-				}
-			}
-			await sleep(200);
-		}
-		throw new Error('assistant response text not found');
-	})()`, string(promptJSON))
-}
-
-func synthesizeDuckSSE(answer, model string) string {
-	payload, _ := json.Marshal(map[string]any{
-		"message": answer,
-		"model":   model,
-	})
-	return "data: " + string(payload) + "\n\ndata: [DONE]\n\n"
 }

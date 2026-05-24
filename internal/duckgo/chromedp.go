@@ -1,116 +1,196 @@
 package duckgo
 
 import (
+	"aurora/logger"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
+	"os"
+	"os/signal"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+	"unicode/utf8"
 
+	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 )
 
-// sha256AndBase64 使用 SHA-256 对字符串进行哈希，然后将结果进行 Base64 编码。
+var (
+	allocatorInitOnce  sync.Once
+	globalAllocatorCtx context.Context
+)
+
+// initChromedp 初始化全局的 chromedp Allocator，连接到一个已存在的 Chrome 实例。
+// 使用 sync.Once 确保这个初始化过程在整个应用生命周期中只执行一次。
+// 返回一个 cancel 函数，用于在程序退出时优雅地关闭 Allocator。
+func initChromedp() (context.CancelFunc, error) {
+	var cancel context.CancelFunc
+	var err error
+
+	allocatorInitOnce.Do(func() {
+		wsURL := os.Getenv("DEVTOOLS_URL")
+		if wsURL == "" {
+			wsURL = "ws://127.0.0.1:9222"
+		}
+
+		allocatorCtx, cancelFunc := context.WithCancel(context.Background())
+		globalAllocatorCtx, cancel = chromedp.NewRemoteAllocator(allocatorCtx, wsURL)
+		go setupGracefulShutdown(cancelFunc)
+	})
+
+	if globalAllocatorCtx == nil {
+		err = errors.New("chromedp allocator failed to initialize")
+	}
+
+	return cancel, err
+}
+
+// getSandboxURL 通过执行一段初始化 JS 来获取沙箱环境的 URL 和一个可能的初始 token。
+func (p *Provider) getSandboxURL() (string, string, error) {
+	if p.sandboxURL.isValid() {
+		return p.sandboxURL.Value, "", nil
+	}
+
+	initJS := `
+		(async function() {
+			const base64DecodeUnicode = str => decodeURIComponent(atob(str).split('').map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join(''));
+			const executeHeaderCode = async () => {
+				try {
+					const response = await fetch('https://duck.ai/duckchat/v1/status', { credentials: 'include', headers: { 'x-vqd-accept': '1' } });
+					const hash = response.headers.get('X-Vqd-Hash-1');
+					if (!hash) throw new Error('Header X-Vqd-Hash-1 not found.');
+					return eval(base64DecodeUnicode(hash));
+				} catch (error) {
+					console.error('Error:', error);
+					throw error;
+				}
+			};
+			return {
+				"sandboxUrl": 'data:text/html;charset=utf-8,' + encodeURIComponent(window.top.document.documentElement.outerHTML),
+				"initialJsResult": await executeHeaderCode()
+			};
+		})();
+	`
+
+	logger.Infof("getting sanboxURL from chromedp")
+	initialURL := "https://duck.ai/"
+	var result struct {
+		SandboxURL      string         `json:"sandboxUrl"`
+		InitialJSResult map[string]any `json:"initialJsResult"`
+	}
+
+	err := executeJS(initialURL, initJS, &result)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to execute initial JS for sandbox: %w", err)
+	}
+
+	if result.SandboxURL == "" {
+		return "", "", errors.New("JS execution did not return a sandbox URL")
+	}
+
+	initialToken, err := encodeToToken(result.InitialJSResult)
+	if err != nil {
+		log.Printf("Could not generate initial token from sandbox result: %v", err)
+		return result.SandboxURL, "", nil
+	}
+
+	return result.SandboxURL, initialToken, nil
+}
+
+// generateTokenFromJS 在给定的沙箱环境中执行 JS 代码以生成 token。
+func (p *Provider) generateTokenFromJS(jsCode, sandboxURL string) (string, error) {
+	var rawJsResult map[string]any
+	err := executeJS(sandboxURL, jsCode, &rawJsResult)
+	if err != nil {
+		return "", err
+	}
+
+	if rawJsResult == nil {
+		return "", errors.New("JS execution returned empty result")
+	}
+
+	return encodeToToken(rawJsResult)
+}
+
+// executeJS 是一个通用的辅助函数，用于在新的 ChromeDP 标签页中导航到指定 URL 并执行 JS。
+func executeJS(url, jsCode string, result any) error {
+	if globalAllocatorCtx == nil {
+		return errors.New("chromedp allocator not initialized")
+	}
+
+	tabCtx, tabCancel := chromedp.NewContext(globalAllocatorCtx)
+	defer tabCancel()
+
+	execCtx, execCancel := context.WithTimeout(tabCtx, 30*time.Second)
+	defer execCancel()
+
+	err := chromedp.Run(execCtx,
+		chromedp.Navigate(url),
+		chromedp.Poll(`document.readyState === "complete" && document.querySelectorAll("#jsa").length > 0`, nil),
+		chromedp.WaitVisible(`body`, chromedp.ByQuery),
+		chromedp.Evaluate(jsCode, result, func(p *runtime.EvaluateParams) *runtime.EvaluateParams {
+			return p.WithAwaitPromise(true)
+		}),
+	)
+
+	return err
+}
+
+// encodeToToken 将 JS 执行返回的 map 编码为最终的 vqd-hash token。
+func encodeToToken(rawJsResult map[string]any) (string, error) {
+	if hashes, ok := rawJsResult["client_hashes"].([]any); ok && len(hashes) >= 3 {
+		hashes[0] = UA
+		for i, v := range hashes {
+			if s, ok := v.(string); ok {
+				hashes[i] = sha256AndBase64(s)
+			}
+		}
+	}
+
+	finalJSONBytes, err := json.Marshal(rawJsResult)
+	if err != nil {
+		return "", fmt.Errorf("failed to serialize final JSON result: %w", err)
+	}
+	return base64.StdEncoding.EncodeToString(finalJSONBytes), nil
+}
+
+func asciiEscape(s string) string {
+	var b strings.Builder
+	for len(s) > 0 {
+		r, size := utf8.DecodeRuneInString(s)
+		s = s[size:]
+		if r <= 0x7f {
+			b.WriteRune(r)
+		} else if r <= 0xffff {
+			fmt.Fprintf(&b, "\\u%04x", r)
+		} else {
+			fmt.Fprintf(&b, "\\U%08x", r)
+		}
+	}
+	return b.String()
+}
+
 func sha256AndBase64(input string) string {
 	h := sha256.New()
 	h.Write([]byte(input))
 	return base64.StdEncoding.EncodeToString(h.Sum(nil))
 }
 
-// ExecuteJS 在浏览器中执行JavaScript
-func ExecuteJS(jsCode string) (map[string]interface{}, error) {
-	// 构建优化的启动选项
-	allocatorOptions := []chromedp.ExecAllocatorOption{
-		chromedp.NoFirstRun,
-		chromedp.NoDefaultBrowserCheck,
-		chromedp.Headless,
-		chromedp.NoSandbox,
-		chromedp.DisableGPU,
-		chromedp.Flag("disable-background-timer-throttling", true),
-		chromedp.Flag("disable-backgrounding-occluded-windows", true),
-		chromedp.Flag("disable-renderer-backgrounding", true),
-		chromedp.Flag("disable-extensions", true),
-		chromedp.Flag("disable-plugins", true),
-		chromedp.Flag("disable-default-apps", true),
-		chromedp.Flag("disable-background-networking", true),
-		chromedp.Flag("disable-sync", true),
-		chromedp.Flag("disable-translate", true),
-		chromedp.Flag("disable-ipc-flooding-protection", true),
-		chromedp.Flag("disable-dev-shm-usage", true),
-		chromedp.Flag("ignore-certificate-errors", true),
-		chromedp.Flag("ignore-ssl-errors", true),
-		chromedp.Flag("ignore-certificate-errors-spki-list", true),
-		chromedp.WindowSize(1200, 800),
-		chromedp.UserAgent(UA),
-	}
-	// 创建分配器上下文
-	allocatorCtx, _ := chromedp.NewExecAllocator(context.Background(), allocatorOptions...)
-	// create context
-	ctx, cancel := chromedp.NewContext(allocatorCtx)
-	defer cancel()
+func setupGracefulShutdown(cancel context.CancelFunc) {
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 
-	// run task
-	var result map[string]interface{}
-	err := chromedp.Run(ctx,
-		chromedp.Navigate("about:blank"),
-		chromedp.Evaluate(jsCode, &result),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("执行 JavaScript 失败: %w", err)
-	}
-	return result, nil
-}
-
-// ExecuteObfuscatedJs 执行经过Base64编码的混淆JavaScript
-func ExecuteObfuscatedJs(base64EncodedJs string) (string, error) {
-	// 解码Base64编码的JavaScript
-	decodedJsBytes, err := base64.StdEncoding.DecodeString(base64EncodedJs)
-	if err != nil {
-		return "", fmt.Errorf("解码 Base64 JS 字符串失败: %w", err)
-	}
-	decodedJs := string(decodedJsBytes)
-	log.Printf("开始执行JS")
-	// 执行JavaScript
-	rawJsResult, err := ExecuteJS(decodedJs)
-	log.Printf("JS执行结束")
-	if err != nil {
-		return "", err
-	}
-
-	// 检查执行结果
-	if rawJsResult == nil {
-		return "", fmt.Errorf("JS 执行返回空结果")
-	}
-	if errMsg, ok := rawJsResult["error"].(string); ok && errMsg != "" {
-		return "", fmt.Errorf("JS 执行报告错误: %s (详情: %v)", errMsg, rawJsResult["stack"])
-	}
-
-	// 后处理：对 client_hashes 进行 SHA-256 和 Base64 编码
-	if clientHashesInterface, ok := rawJsResult["client_hashes"].([]interface{}); ok && len(clientHashesInterface) >= 2 {
-		// 处理 client_hashes[0]
-		if combinedUserAgentHash, ok := clientHashesInterface[0].(string); ok {
-			rawJsResult["client_hashes"].([]interface{})[0] = sha256AndBase64(combinedUserAgentHash)
-		} else {
-			log.Printf("警告: client_hashes[0] 不是字符串或格式不正确，跳过处理。")
-		}
-
-		// 处理 client_hashes[1]
-		if htmlParsingBasedHash, ok := clientHashesInterface[1].(string); ok {
-			rawJsResult["client_hashes"].([]interface{})[1] = sha256AndBase64(htmlParsingBasedHash)
-		} else {
-			log.Printf("警告: client_hashes[1] 不是字符串或格式不正确，跳过处理。")
-		}
-	} else {
-		log.Printf("警告: 未找到 client_hashes 数组或长度不足，跳过后处理。")
-	}
-
-	// 序列化结果为JSON
-	finalJsonBytes, err := json.Marshal(rawJsResult)
-	if err != nil {
-		return "", fmt.Errorf("序列化最终 JSON 结果失败: %w", err)
-	}
-
-	// 返回Base64编码的结果
-	return base64.StdEncoding.EncodeToString(finalJsonBytes), nil
+	go func() {
+		<-c
+		logger.Infof("Received exit signal, shutting down gracefully...")
+		cancel()
+		time.Sleep(1 * time.Second)
+		os.Exit(0)
+	}()
 }

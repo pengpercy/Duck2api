@@ -12,6 +12,14 @@
     // This field supports path resolution with ~ or . symbols
     "program": ".",
     // cwd: defaults to the current working directory of your project ($ZED_WORKTREE_ROOT)
-    "cwd": "$ZED_WORKTREE_ROOT"
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "env": {
+      "PROXY_URL": "http://127.0.0.1:6152",
+      "DEVTOOLS_URL": "ws://127.0.0.1:9223",
+      "LOG_LEVEL": "DEBUG",
+      "TOKEN_EXPIRATION_SECONDS": "180",
+      "SCRIPTS_CACHE_SECONDS": "180",
+      "SANDBOX_CACHE_SECONDS": "86400"
+    }
   }
 ]

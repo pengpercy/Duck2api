@@ -1,0 +1,13 @@
+.git
+.github
+.gitignore
+README.md
+LICENSE
+docker-compose.yml
+render.yaml
+release.bat
+build.sh
+start.sh
+Procfile
+vercel.json
+.DS_Store

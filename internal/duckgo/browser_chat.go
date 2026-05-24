@@ -1,0 +1,574 @@
+package duckgo
+
+import (
+	"aurora/httpclient"
+	duckgotypes "aurora/typings/duckgo"
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/chromedp/cdproto/network"
+	"github.com/chromedp/cdproto/runtime"
+	"github.com/chromedp/chromedp"
+)
+
+type browserChatResult struct {
+	status         int64
+	headers        network.Headers
+	requestHeaders network.Headers
+	body           string
+}
+
+type browserTokenState struct {
+	headers httpclient.AuroraHeaders
+}
+
+// PostConversationViaBrowser sends the prompt through the real duck.ai page and
+// captures the browser's /duckchat/v1/chat response. This avoids reimplementing
+// Duck.ai's moving challenge/token logic in Go.
+func (p *Provider) PostConversationViaBrowser(request duckgotypes.ApiRequest) (*http.Response, error) {
+	prompt, err := latestUserPrompt(request)
+	if err != nil {
+		return nil, err
+	}
+
+	p.browserMutex.Lock()
+	defer p.browserMutex.Unlock()
+
+	if p.browserToken.isValid() {
+		resp, err := p.postConversationWithBrowserToken(request)
+		if err == nil && resp.StatusCode != http.StatusTeapot {
+			return resp, nil
+		}
+		if resp != nil {
+			resp.Body.Close()
+		}
+		p.browserToken = cachedItem[browserTokenState]{}
+	}
+
+	result, err := p.runBrowserChat(prompt, request.Model)
+	if err != nil {
+		return nil, err
+	}
+	p.cacheBrowserToken(result.requestHeaders)
+
+	resp := &http.Response{
+		StatusCode: int(result.status),
+		Status:     fmt.Sprintf("%d %s", result.status, http.StatusText(int(result.status))),
+		Header:     browserHeadersToHTTP(result.headers),
+		Body:       io.NopCloser(strings.NewReader(result.body)),
+	}
+	if resp.Header.Get("Content-Type") == "" {
+		resp.Header.Set("Content-Type", "text/event-stream")
+	}
+	return resp, nil
+}
+
+func (p *Provider) prewarmBrowserToken() {
+	p.browserMutex.Lock()
+	defer p.browserMutex.Unlock()
+	if p.browserToken.isValid() {
+		return
+	}
+	_ = p.refreshBrowserToken()
+}
+
+func (p *Provider) refreshBrowserToken() error {
+	var err error
+	if os.Getenv("DUCKAI_DIRECT_TOKEN_BUILD") == "1" {
+		var headers httpclient.AuroraHeaders
+		headers, err = p.buildBrowserHeadersDirect()
+		if err == nil {
+			p.cacheDirectBrowserToken(headers)
+			if p.browserToken.isValid() {
+				return nil
+			}
+		}
+	}
+
+	seedPrompt := getStringFromEnv("BROWSER_TOKEN_SEED_PROMPT", "hi")
+	requestHeaders, seedErr := p.runBrowserSeed(seedPrompt)
+	if seedErr != nil {
+		if err != nil {
+			return fmt.Errorf("direct token build failed: %v; seed fallback failed: %w", err, seedErr)
+		}
+		return seedErr
+	}
+	p.cacheBrowserToken(requestHeaders)
+	if !p.browserToken.isValid() {
+		if err != nil {
+			return fmt.Errorf("direct token build failed: %v; browser token seed did not capture x-vqd header", err)
+		}
+		return errors.New("browser token seed did not capture x-vqd header")
+	}
+	return nil
+}
+
+func (p *Provider) postConversationWithBrowserToken(request duckgotypes.ApiRequest) (*http.Response, error) {
+	bodyJSON, err := json.Marshal(request)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request body: %w", err)
+	}
+	headers := cloneHeaders(p.browserToken.Value.headers)
+	return p.client.Request(httpclient.POST, "https://duck.ai/duckchat/v1/chat", headers, nil, bytes.NewBuffer(bodyJSON))
+}
+
+func (p *Provider) cacheBrowserToken(headers network.Headers) {
+	cached := httpclient.AuroraHeaders{}
+	for _, key := range []string{
+		"X-Vqd-Hash-1",
+		"x-vqd-hash-1",
+		"x-fe-version",
+		"x-fe-signals",
+		"x-ddg-journey-id",
+		"User-Agent",
+		"sec-ch-ua",
+		"sec-ch-ua-mobile",
+		"sec-ch-ua-platform",
+	} {
+		if value, ok := headerString(headers, key); ok && value != "" {
+			cached.Set(key, value)
+		}
+	}
+	cached.Set("accept", "text/event-stream")
+	cached.Set("content-type", "application/json")
+	cached.Set("origin", "https://duck.ai")
+	cached.Set("referer", "https://duck.ai/")
+	if cached["X-Vqd-Hash-1"] == "" && cached["x-vqd-hash-1"] == "" {
+		return
+	}
+	p.browserToken = cachedItem[browserTokenState]{
+		Value:    browserTokenState{headers: cached},
+		ExpireAt: time.Now().Add(getDurationFromEnv("BROWSER_TOKEN_EXPIRATION_SECONDS", 30*time.Minute)),
+	}
+}
+
+func (p *Provider) cacheDirectBrowserToken(headers httpclient.AuroraHeaders) {
+	if headers == nil {
+		return
+	}
+	token := headers["x-vqd-hash-1"]
+	if token == "" {
+		token = headers["X-Vqd-Hash-1"]
+	}
+	if token == "" {
+		return
+	}
+	p.browserToken = cachedItem[browserTokenState]{
+		Value:    browserTokenState{headers: cloneHeaders(headers)},
+		ExpireAt: time.Now().Add(getDurationFromEnv("BROWSER_TOKEN_EXPIRATION_SECONDS", 30*time.Minute)),
+	}
+}
+
+func cloneHeaders(headers httpclient.AuroraHeaders) httpclient.AuroraHeaders {
+	clone := httpclient.AuroraHeaders{}
+	for key, value := range headers {
+		clone.Set(key, value)
+	}
+	return clone
+}
+
+func headerString(headers network.Headers, key string) (string, bool) {
+	for currentKey, value := range headers {
+		if !strings.EqualFold(currentKey, key) {
+			continue
+		}
+		switch v := value.(type) {
+		case string:
+			return v, true
+		default:
+			return fmt.Sprint(v), true
+		}
+	}
+	return "", false
+}
+
+func latestUserPrompt(request duckgotypes.ApiRequest) (string, error) {
+	for i := len(request.Messages) - 1; i >= 0; i-- {
+		switch msg := request.Messages[i].(type) {
+		case duckgotypes.MessageUser:
+			return messageContentText(msg.Content)
+		case map[string]any:
+			if msg["role"] == "user" {
+				return messageContentText(msg["content"])
+			}
+		}
+	}
+	return "", errors.New("browser chat requires at least one user message")
+}
+
+func messageContentText(content any) (string, error) {
+	switch v := content.(type) {
+	case string:
+		if strings.TrimSpace(v) == "" {
+			return "", errors.New("user message is empty")
+		}
+		return v, nil
+	case []any:
+		var b strings.Builder
+		for _, part := range v {
+			if m, ok := part.(map[string]any); ok && m["type"] == "text" {
+				if text, ok := m["text"].(string); ok {
+					b.WriteString(text)
+				}
+			}
+		}
+		if strings.TrimSpace(b.String()) == "" {
+			return "", errors.New("browser chat currently supports text prompts only")
+		}
+		return b.String(), nil
+	default:
+		data, _ := json.Marshal(v)
+		if len(data) > 0 && string(data) != "null" {
+			return string(data), nil
+		}
+		return "", errors.New("unsupported user message content")
+	}
+}
+
+func (p *Provider) ensureBrowserPage(ctx context.Context) error {
+	if globalAllocatorCtx == nil {
+		return errors.New("chromedp allocator not initialized")
+	}
+
+	if p.browserCtx != nil {
+		if err := chromedp.Run(p.browserCtx, chromedp.Evaluate(`document.readyState`, nil)); err != nil {
+			p.browserCancel()
+			p.browserCtx = nil
+			p.browserCancel = nil
+		} else {
+			return nil
+		}
+	}
+
+	p.browserCtx, p.browserCancel = chromedp.NewContext(globalAllocatorCtx)
+	return chromedp.Run(p.browserCtx,
+		network.Enable(),
+		chromedp.Navigate("https://duck.ai/"),
+		chromedp.WaitVisible("body", chromedp.ByQuery),
+		acceptOnboarding(),
+	)
+}
+
+func (p *Provider) buildBrowserHeadersDirect() (httpclient.AuroraHeaders, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	if err := p.ensureBrowserPage(ctx); err != nil {
+		return nil, err
+	}
+
+	js := `(async () => {
+		const toBase64 = bytes => {
+			let binary = '';
+			for (const b of bytes) binary += String.fromCharCode(b);
+			return btoa(binary);
+		};
+		const sha256Base64 = async input => {
+			const bytes = new TextEncoder().encode(input);
+			const digest = await crypto.subtle.digest('SHA-256', bytes);
+			return toBase64(new Uint8Array(digest));
+		};
+		const decodeChallenge = encoded => decodeURIComponent(
+			atob(encoded).split('').map(c => '%' + c.charCodeAt(0).toString(16).padStart(2, '0')).join('')
+		);
+		const status = await fetch('https://duck.ai/duckchat/v1/status', {
+			credentials: 'include',
+			headers: {
+				'x-vqd-accept': '1',
+				'cache-control': 'no-store',
+				'pragma': 'no-cache'
+			}
+		});
+		const challenge = status.headers.get('x-vqd-hash-1');
+		if (!challenge) throw new Error('x-vqd-hash-1 header not found');
+		const raw = await eval(decodeChallenge(challenge));
+		if (!raw || !Array.isArray(raw.client_hashes)) throw new Error('challenge payload malformed');
+		raw.client_hashes[0] = navigator.userAgent;
+		for (let i = 0; i < raw.client_hashes.length; i++) {
+			raw.client_hashes[i] = await sha256Base64(String(raw.client_hashes[i]));
+		}
+		if (raw.meta && !raw.meta.origin) raw.meta.origin = location.origin;
+		const token = btoa(JSON.stringify(raw));
+		const headers = {
+			'accept': 'text/event-stream',
+			'content-type': 'application/json',
+			'origin': location.origin,
+			'referer': location.origin + '/',
+			'user-agent': navigator.userAgent,
+			'x-vqd-hash-1': token,
+			'x-fe-signals': btoa(JSON.stringify({
+				start: Date.now() - 1200,
+				events: [
+					{name: 'startNewChat_free', delta: 80},
+					{name: 'recentChatsListImpression', delta: 180}
+				],
+				end: 260
+			})),
+			'x-fe-version': window.__DDG_BE_VERSION__ || window.__DDG_FE_CHAT_HASH__ || '',
+			'x-ddg-journey-id': (crypto.randomUUID ? crypto.randomUUID() : String(Date.now())).replace(/-/g, '')
+		};
+		const meta = document.querySelector('meta[http-equiv="Content-Security-Policy"]');
+		if (meta && !headers['x-fe-version']) {
+			headers['x-fe-version'] = meta.getAttribute('content') || '';
+		}
+		return headers;
+	})()`
+
+	var result map[string]string
+	if err := chromedp.Run(p.browserCtx, chromedp.Evaluate(js, &result, func(p *runtime.EvaluateParams) *runtime.EvaluateParams {
+		return p.WithAwaitPromise(true)
+	})); err != nil {
+		return nil, err
+	}
+	headers := httpclient.AuroraHeaders{}
+	for key, value := range result {
+		headers.Set(key, value)
+	}
+	return headers, nil
+}
+
+func (p *Provider) runBrowserChat(prompt, model string) (*browserChatResult, error) {
+	result, err := p.runBrowserRequest(prompt)
+	if err != nil {
+		return nil, err
+	}
+	if result.status != http.StatusOK {
+		result.body = fmt.Sprintf(`{"action":"error","status":%d,"type":"ERR_BROWSER_CHAT"}`, result.status)
+		return result, nil
+	}
+	runCtx := p.browserCtx
+	var answer string
+	if err := chromedp.Run(runCtx, chromedp.Evaluate(waitAssistantTextJS(prompt), &answer, func(p *runtime.EvaluateParams) *runtime.EvaluateParams {
+		return p.WithAwaitPromise(true)
+	})); err != nil {
+		return nil, err
+	}
+	result.body = synthesizeDuckSSE(answer, model)
+	return result, nil
+}
+
+func (p *Provider) runBrowserSeed(prompt string) (network.Headers, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	if err := p.ensureBrowserPage(ctx); err != nil {
+		return nil, err
+	}
+
+	runCtx := p.browserCtx
+	requestHeaders := make(chan network.Headers, 1)
+
+	chromedp.ListenTarget(runCtx, func(ev any) {
+		if e, ok := ev.(*network.EventRequestWillBeSent); ok && strings.Contains(e.Request.URL, "/duckchat/v1/chat") {
+			select {
+			case requestHeaders <- e.Request.Headers:
+			default:
+			}
+		}
+	})
+
+	if err := chromedp.Run(runCtx,
+		prepareNewChat(),
+		sendPrompt(prompt),
+	); err != nil {
+		return nil, err
+	}
+
+	select {
+	case headers := <-requestHeaders:
+		return headers, nil
+	case <-time.After(10 * time.Second):
+		return nil, errors.New("timed out waiting for browser seed request")
+	}
+}
+
+func (p *Provider) runBrowserRequest(prompt string) (*browserChatResult, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := p.ensureBrowserPage(ctx); err != nil {
+		return nil, err
+	}
+
+	runCtx := p.browserCtx
+
+	statuses := make(chan browserChatResult, 1)
+	requestHeaders := make(chan network.Headers, 1)
+
+	chromedp.ListenTarget(runCtx, func(ev any) {
+		if e, ok := ev.(*network.EventRequestWillBeSent); ok {
+			if strings.Contains(e.Request.URL, "/duckchat/v1/chat") {
+				select {
+				case requestHeaders <- e.Request.Headers:
+				default:
+				}
+			}
+			return
+		}
+		if e, ok := ev.(*network.EventResponseReceived); ok {
+			if strings.Contains(e.Response.URL, "/duckchat/v1/chat") {
+				select {
+				case statuses <- browserChatResult{
+					status:  int64(e.Response.Status),
+					headers: e.Response.Headers,
+				}:
+				default:
+				}
+			}
+		}
+	})
+
+	if err := chromedp.Run(runCtx,
+		prepareNewChat(),
+		sendPrompt(prompt),
+	); err != nil {
+		return nil, err
+	}
+
+	result := &browserChatResult{}
+	select {
+	case status := <-statuses:
+		result.status = status.status
+		result.headers = status.headers
+	case <-time.After(30 * time.Second):
+		return nil, errors.New("timed out waiting for browser chat request")
+	}
+	select {
+	case result.requestHeaders = <-requestHeaders:
+	default:
+	}
+	return result, nil
+}
+
+func prepareNewChat() chromedp.Action {
+	return chromedp.Evaluate(`(async () => {
+		const sleep = ms => new Promise(r => setTimeout(r, ms));
+		const textOf = el => (el.innerText || el.textContent || el.value || '').trim();
+		for (const el of [...document.querySelectorAll('button, [role="button"], a')]) {
+			const label = ((el.getAttribute('aria-label') || '') + ' ' + textOf(el)).toLowerCase();
+			if (label.includes('new chat') || label.includes('新聊天')) {
+				el.click();
+				await sleep(500);
+				return true;
+			}
+		}
+		return false;
+	})()`, nil)
+}
+
+func acceptOnboarding() chromedp.Action {
+	return chromedp.Evaluate(`(async () => {
+		const sleep = ms => new Promise(r => setTimeout(r, ms));
+		const textOf = el => (el.innerText || el.textContent || el.value || '').trim();
+		for (const needle of ['agree', 'accept', 'i agree', 'get started', 'start chatting', 'continue']) {
+			for (const el of [...document.querySelectorAll('button, [role="button"], a')]) {
+				if (textOf(el).toLowerCase().includes(needle)) {
+					el.click();
+					await sleep(700);
+					return true;
+				}
+			}
+		}
+		return false;
+	})()`, nil)
+}
+
+func sendPrompt(prompt string) chromedp.Action {
+	const inputSelector = `textarea, [contenteditable="true"], div[role="textbox"], input[type="text"]`
+	submitJS := `(async () => {
+		const sleep = ms => new Promise(r => setTimeout(r, ms));
+		const textOf = el => (el.innerText || el.textContent || el.value || '').trim();
+		for (let i = 0; i < 50; i++) {
+			const submit = document.querySelector('button[type="submit"]:not([disabled])') ||
+				[...document.querySelectorAll('button, [role="button"]')].find(el => {
+					const label = ((el.getAttribute('aria-label') || '') + ' ' + textOf(el)).toLowerCase();
+					const disabled = el.disabled || el.getAttribute('aria-disabled') === 'true';
+					return !disabled && (label.includes('send') || label.includes('submit') || label.includes('ask'));
+				});
+			if (submit) {
+				submit.click();
+				return true;
+			}
+			await sleep(200);
+		}
+		throw new Error('enabled submit button not found');
+	})()`
+
+	return chromedp.Tasks{
+		chromedp.WaitVisible(inputSelector, chromedp.ByQuery),
+		chromedp.Click(inputSelector, chromedp.ByQuery),
+		chromedp.SendKeys(inputSelector, prompt, chromedp.ByQuery),
+		chromedp.Sleep(100 * time.Millisecond),
+		chromedp.Evaluate(submitJS, nil),
+	}
+}
+
+func browserHeadersToHTTP(headers network.Headers) http.Header {
+	out := http.Header{}
+	for key, value := range headers {
+		switch v := value.(type) {
+		case string:
+			out.Set(key, v)
+		default:
+			data, _ := json.Marshal(v)
+			out.Set(key, string(data))
+		}
+	}
+	return out
+}
+
+func waitAssistantTextJS(prompt string) string {
+	promptJSON, _ := json.Marshal(prompt)
+	return fmt.Sprintf(`(async () => {
+		const prompt = %s;
+		const sleep = ms => new Promise(r => setTimeout(r, ms));
+		const clean = text => text
+			.split('\n')
+			.map(s => s.trim())
+			.filter(Boolean)
+			.filter(s => ![
+				'Ask anything', 'Search', 'Send', 'New Chat', 'Recent Chats',
+				'Upgrade', 'Settings', 'Stop generating', 'GPT-5 mini', '私密',
+				'工具', '快速', '·', '所有聊天记录均为私密。人工智能可能会出错。',
+				'正在生成回复', 'Generating response'
+			].includes(s))
+			.filter(s => !/^GPT-\d/i.test(s))
+			.join('\n')
+			.trim();
+		let last = '';
+		let stable = 0;
+		for (let i = 0; i < 450; i++) {
+			const text = document.body.innerText || '';
+			const idx = text.lastIndexOf(prompt);
+			if (idx >= 0) {
+				const tail = clean(text.slice(idx + prompt.length));
+				if (tail.length > 0) {
+					if (tail === last) stable++;
+					else {
+						last = tail;
+						stable = 0;
+					}
+					if (stable >= 5) return tail;
+				}
+			}
+			await sleep(200);
+		}
+		throw new Error('assistant response text not found');
+	})()`, string(promptJSON))
+}
+
+func synthesizeDuckSSE(answer, model string) string {
+	payload, _ := json.Marshal(map[string]any{
+		"message": answer,
+		"model":   model,
+	})
+	return "data: " + string(payload) + "\n\ndata: [DONE]\n\n"
+}

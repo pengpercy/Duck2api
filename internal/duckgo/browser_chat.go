@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -81,30 +80,31 @@ func (p *Provider) prewarmBrowserToken() {
 }
 
 func (p *Provider) refreshBrowserToken() error {
-	var err error
-	if os.Getenv("DUCKAI_DIRECT_TOKEN_BUILD") == "1" {
-		var headers httpclient.AuroraHeaders
-		headers, err = p.buildBrowserHeadersDirect()
-		if err == nil {
+	challenge, err := p.getBrowserChallengeScript()
+	if err == nil {
+		headers, buildErr := p.buildBrowserHeadersFromChallenge(challenge)
+		if buildErr == nil {
 			p.cacheDirectBrowserToken(headers)
 			if p.browserToken.isValid() {
 				return nil
 			}
+		} else {
+			err = buildErr
 		}
 	}
 
-	seedPrompt := getStringFromEnv("BROWSER_TOKEN_SEED_PROMPT", "hi")
+	seedPrompt := getStringFromEnv("BROWSER_TOKEN_SEED_PROMPT", "ping")
 	requestHeaders, seedErr := p.runBrowserSeed(seedPrompt)
 	if seedErr != nil {
 		if err != nil {
-			return fmt.Errorf("direct token build failed: %v; seed fallback failed: %w", err, seedErr)
+			return fmt.Errorf("browser challenge execution failed: %v; seed fallback failed: %w", err, seedErr)
 		}
 		return seedErr
 	}
 	p.cacheBrowserToken(requestHeaders)
 	if !p.browserToken.isValid() {
 		if err != nil {
-			return fmt.Errorf("direct token build failed: %v; browser token seed did not capture x-vqd header", err)
+			return fmt.Errorf("browser challenge execution failed: %v; browser token seed did not capture x-vqd header", err)
 		}
 		return errors.New("browser token seed did not capture x-vqd header")
 	}
@@ -117,7 +117,12 @@ func (p *Provider) postConversationWithBrowserToken(request duckgotypes.ApiReque
 		return nil, fmt.Errorf("failed to marshal request body: %w", err)
 	}
 	headers := cloneHeaders(p.browserToken.Value.headers)
-	return p.client.Request(httpclient.POST, "https://duck.ai/duckchat/v1/chat", headers, nil, bytes.NewBuffer(bodyJSON))
+	resp, err := p.client.Request(httpclient.POST, "https://duck.ai/duckchat/v1/chat", headers, nil, bytes.NewBuffer(bodyJSON))
+	if resp != nil {
+		p.updateScriptsFromHeader(resp.Header)
+		p.scheduleBrowserTokenRefreshLocked()
+	}
+	return resp, err
 }
 
 func (p *Provider) cacheBrowserToken(headers network.Headers) {
@@ -243,22 +248,63 @@ func (p *Provider) ensureBrowserPage(ctx context.Context) error {
 			p.browserCancel()
 			p.browserCtx = nil
 			p.browserCancel = nil
+			p.browserListenerAttached = false
+			p.browserRequestHeadersCh = nil
+			p.browserResponseCh = nil
 		} else {
 			return nil
 		}
 	}
 
 	p.browserCtx, p.browserCancel = chromedp.NewContext(globalAllocatorCtx)
-	return chromedp.Run(p.browserCtx,
+	if err := chromedp.Run(p.browserCtx,
 		network.Enable(),
 		chromedp.Navigate("https://duck.ai/"),
 		chromedp.WaitVisible("body", chromedp.ByQuery),
 		tryClickOnboardingAgree(),
 		acceptOnboarding(),
-	)
+	); err != nil {
+		return err
+	}
+	p.attachBrowserListener()
+	return nil
 }
 
-func (p *Provider) buildBrowserHeadersDirect() (httpclient.AuroraHeaders, error) {
+func (p *Provider) attachBrowserListener() {
+	if p.browserCtx == nil || p.browserListenerAttached {
+		return
+	}
+	p.browserListenerAttached = true
+	chromedp.ListenTarget(p.browserCtx, func(ev any) {
+		switch e := ev.(type) {
+		case *network.EventRequestWillBeSent:
+			if !strings.Contains(e.Request.URL, "/duckchat/v1/chat") {
+				return
+			}
+			if ch := p.browserRequestHeadersCh; ch != nil {
+				select {
+				case ch <- e.Request.Headers:
+				default:
+				}
+			}
+		case *network.EventResponseReceived:
+			if !strings.Contains(e.Response.URL, "/duckchat/v1/chat") {
+				return
+			}
+			if ch := p.browserResponseCh; ch != nil {
+				select {
+				case ch <- browserChatResult{
+					status:  int64(e.Response.Status),
+					headers: e.Response.Headers,
+				}:
+				default:
+				}
+			}
+		}
+	})
+}
+
+func (p *Provider) buildBrowserHeadersFromChallenge(challenge string) (httpclient.AuroraHeaders, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
@@ -266,7 +312,12 @@ func (p *Provider) buildBrowserHeadersDirect() (httpclient.AuroraHeaders, error)
 		return nil, err
 	}
 
-	js := `(async () => {
+	challengeJSON, err := json.Marshal(challenge)
+	if err != nil {
+		return nil, err
+	}
+
+	js := fmt.Sprintf(`(async () => {
 		const toBase64 = bytes => {
 			let binary = '';
 			for (const b of bytes) binary += String.fromCharCode(b);
@@ -277,20 +328,10 @@ func (p *Provider) buildBrowserHeadersDirect() (httpclient.AuroraHeaders, error)
 			const digest = await crypto.subtle.digest('SHA-256', bytes);
 			return toBase64(new Uint8Array(digest));
 		};
-		const decodeChallenge = encoded => decodeURIComponent(
-			atob(encoded).split('').map(c => '%' + c.charCodeAt(0).toString(16).padStart(2, '0')).join('')
-		);
-		const status = await fetch('https://duck.ai/duckchat/v1/status', {
-			credentials: 'include',
-			headers: {
-				'x-vqd-accept': '1',
-				'cache-control': 'no-store',
-				'pragma': 'no-cache'
-			}
-		});
-		const challenge = status.headers.get('x-vqd-hash-1');
-		if (!challenge) throw new Error('x-vqd-hash-1 header not found');
-		const raw = await eval(decodeChallenge(challenge));
+		const challenge = %s;
+		const raw = await eval(decodeURIComponent(
+			atob(challenge).split('').map(c => '%%' + c.charCodeAt(0).toString(16).padStart(2, '0')).join('')
+		));
 		if (!raw || !Array.isArray(raw.client_hashes)) throw new Error('challenge payload malformed');
 		raw.client_hashes[0] = navigator.userAgent;
 		for (let i = 0; i < raw.client_hashes.length; i++) {
@@ -321,7 +362,7 @@ func (p *Provider) buildBrowserHeadersDirect() (httpclient.AuroraHeaders, error)
 			headers['x-fe-version'] = meta.getAttribute('content') || '';
 		}
 		return headers;
-	})()`
+	})()`, string(challengeJSON))
 
 	var result map[string]string
 	if err := chromedp.Run(p.browserCtx, chromedp.Evaluate(js, &result, func(p *runtime.EvaluateParams) *runtime.EvaluateParams {
@@ -334,6 +375,57 @@ func (p *Provider) buildBrowserHeadersDirect() (httpclient.AuroraHeaders, error)
 		headers.Set(key, value)
 	}
 	return headers, nil
+}
+
+func (p *Provider) getBrowserChallengeScript() (string, error) {
+	p.tokenMutex.Lock()
+	if p.jsCode.isValid() && p.jsCode.Value != "" {
+		challenge := p.jsCode.Value
+		p.tokenMutex.Unlock()
+		return challenge, nil
+	}
+	p.tokenMutex.Unlock()
+
+	challenge, err := p.getScripts(true)
+	if err != nil {
+		return "", err
+	}
+
+	p.tokenMutex.Lock()
+	p.jsCode = cachedItem[string]{
+		Value:    challenge,
+		ExpireAt: time.Now().Add(p.scriptsCacheDuration),
+	}
+	p.tokenMutex.Unlock()
+	return challenge, nil
+}
+
+func (p *Provider) scheduleBrowserTokenRefreshLocked() {
+	if p.browserRefreshInFlight {
+		return
+	}
+	p.browserRefreshInFlight = true
+
+	go func() {
+		defer func() {
+			p.browserMutex.Lock()
+			p.browserRefreshInFlight = false
+			p.browserMutex.Unlock()
+		}()
+
+		p.browserMutex.Lock()
+		defer p.browserMutex.Unlock()
+
+		challenge, err := p.getBrowserChallengeScript()
+		if err != nil {
+			return
+		}
+		headers, err := p.buildBrowserHeadersFromChallenge(challenge)
+		if err != nil {
+			return
+		}
+		p.cacheDirectBrowserToken(headers)
+	}()
 }
 
 func (p *Provider) runBrowserChat(prompt, model string) (*browserChatResult, error) {
@@ -366,15 +458,8 @@ func (p *Provider) runBrowserSeed(prompt string) (network.Headers, error) {
 
 	runCtx := p.browserCtx
 	requestHeaders := make(chan network.Headers, 1)
-
-	chromedp.ListenTarget(runCtx, func(ev any) {
-		if e, ok := ev.(*network.EventRequestWillBeSent); ok && strings.Contains(e.Request.URL, "/duckchat/v1/chat") {
-			select {
-			case requestHeaders <- e.Request.Headers:
-			default:
-			}
-		}
-	})
+	p.browserRequestHeadersCh = requestHeaders
+	defer func() { p.browserRequestHeadersCh = nil }()
 
 	if err := chromedp.Run(runCtx,
 		prepareNewChat(),
@@ -403,29 +488,12 @@ func (p *Provider) runBrowserRequest(prompt string) (*browserChatResult, error) 
 
 	statuses := make(chan browserChatResult, 1)
 	requestHeaders := make(chan network.Headers, 1)
-
-	chromedp.ListenTarget(runCtx, func(ev any) {
-		if e, ok := ev.(*network.EventRequestWillBeSent); ok {
-			if strings.Contains(e.Request.URL, "/duckchat/v1/chat") {
-				select {
-				case requestHeaders <- e.Request.Headers:
-				default:
-				}
-			}
-			return
-		}
-		if e, ok := ev.(*network.EventResponseReceived); ok {
-			if strings.Contains(e.Response.URL, "/duckchat/v1/chat") {
-				select {
-				case statuses <- browserChatResult{
-					status:  int64(e.Response.Status),
-					headers: e.Response.Headers,
-				}:
-				default:
-				}
-			}
-		}
-	})
+	p.browserRequestHeadersCh = requestHeaders
+	p.browserResponseCh = statuses
+	defer func() {
+		p.browserRequestHeadersCh = nil
+		p.browserResponseCh = nil
+	}()
 
 	if err := chromedp.Run(runCtx,
 		prepareNewChat(),

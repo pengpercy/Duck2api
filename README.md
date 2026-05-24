@@ -104,9 +104,8 @@ http_proxy=http://127.0.0.1:7890  # PROXY_URL 未设置时的后备代理
 ```bash
 DEVTOOLS_URL=ws://127.0.0.1:9222  # Chrome DevTools 远程调试地址
 DUCKAI_BROWSER_CHAT=1             # 默认 1。启用基于真实浏览器会话的请求路径
-DUCKAI_BROWSER_PREWARM=1          # 默认 1。启动后后台预热浏览器 token
-DUCKAI_DIRECT_TOKEN_BUILD=0       # 默认 0。实验开关，尝试页面内直接构造 token
-BROWSER_TOKEN_SEED_PROMPT=hi      # 浏览器 token 预热时使用的 seed prompt
+DUCKAI_BROWSER_PREWARM=1          # 默认 1。启动后后台预热 challenge/token
+BROWSER_TOKEN_SEED_PROMPT=ping    # challenge 执行失败时，浏览器 seed fallback 使用的 prompt
 FE_VERSION=...                    # 可覆盖默认 x-fe-version
 ```
 

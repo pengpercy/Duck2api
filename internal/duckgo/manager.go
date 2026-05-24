@@ -17,6 +17,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/chromedp/cdproto/network"
 )
 
 // cachedItem 结构体用于存储带有过期时间的数据。
@@ -40,18 +42,22 @@ func (ci *cachedItem[T]) isValid() bool {
 // 它封装了获取和缓存 vqd-hash token 的所有逻辑，并管理对 ChromeDP 的调用。
 // 这避免了使用全局变量，使代码更易于测试和维护。
 type Provider struct {
-	client        httpclient.AuroraHttpClient
-	proxyURL      string
-	vqdToken      cachedItem[string] // 缓存 vqd-hash token
-	jsCode        cachedItem[string] // 缓存从 header 获取的 JS 代码
-	sandboxURL    cachedItem[string] // 缓存用于执行 JS 的沙箱环境 URL
-	tokenMutex    sync.Mutex         // 用于保护 token 刷新过程的互斥锁
-	browserMutex  sync.Mutex         // Duck.ai 页面自动化串行锁
-	browserToken  cachedItem[browserTokenState]
-	chromeCancel  context.CancelFunc // 用于在程序结束时关闭 ChromeDP 上下文
-	browserCtx    context.Context
-	browserCancel context.CancelFunc
-	feVersion     string
+	client                  httpclient.AuroraHttpClient
+	proxyURL                string
+	vqdToken                cachedItem[string] // 缓存 vqd-hash token
+	jsCode                  cachedItem[string] // 缓存从 header 获取的 JS 代码
+	sandboxURL              cachedItem[string] // 缓存用于执行 JS 的沙箱环境 URL
+	tokenMutex              sync.Mutex         // 用于保护 token 刷新过程的互斥锁
+	browserMutex            sync.Mutex         // Duck.ai 页面自动化串行锁
+	browserToken            cachedItem[browserTokenState]
+	chromeCancel            context.CancelFunc // 用于在程序结束时关闭 ChromeDP 上下文
+	browserCtx              context.Context
+	browserCancel           context.CancelFunc
+	browserListenerAttached bool
+	browserRefreshInFlight  bool
+	browserRequestHeadersCh chan network.Headers
+	browserResponseCh       chan browserChatResult
+	feVersion               string
 	// 从环境变量读取的缓存时间
 	tokenExpiration      time.Duration
 	scriptsCacheDuration time.Duration

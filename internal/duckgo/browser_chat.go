@@ -253,6 +253,7 @@ func (p *Provider) ensureBrowserPage(ctx context.Context) error {
 		network.Enable(),
 		chromedp.Navigate("https://duck.ai/"),
 		chromedp.WaitVisible("body", chromedp.ByQuery),
+		tryClickOnboardingAgree(),
 		acceptOnboarding(),
 	)
 }
@@ -462,6 +463,22 @@ func prepareNewChat() chromedp.Action {
 		}
 		return false;
 	})()`, nil)
+}
+
+func tryClickOnboardingAgree() chromedp.Action {
+	return chromedp.ActionFunc(func(ctx context.Context) error {
+		var exists bool
+		if err := chromedp.Evaluate(`!!document.querySelector("button[data-testid='DUCKAI_ONBOARDING_AGREE']")`, &exists).Do(ctx); err != nil {
+			return nil
+		}
+		if !exists {
+			return nil
+		}
+		if err := chromedp.Click("button[data-testid='DUCKAI_ONBOARDING_AGREE']", chromedp.ByQuery).Do(ctx); err != nil {
+			return nil
+		}
+		return chromedp.Sleep(500 * time.Millisecond).Do(ctx)
+	})
 }
 
 func acceptOnboarding() chromedp.Action {

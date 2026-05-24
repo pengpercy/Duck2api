@@ -10,6 +10,9 @@ tools/authenticator/.proxies.txt.swp
 .env
 *.har
 .idea/
+.claude/
+.zed/
+.vscode/
 /logs/
 /target/
 /bin/

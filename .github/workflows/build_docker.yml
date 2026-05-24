@@ -11,35 +11,99 @@ on:
 env:
   GHCR_REPO: ghcr.io/pengpercy/duck2api
 
+concurrency:
+  group: docker-build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  main:
-    runs-on: ubuntu-latest
+  build:
+    name: Build ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-24.04
+          - platform: linux/arm64/v8
+            runner: ubuntu-24.04-arm
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v1
+        uses: actions/checkout@v6.0.2
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v1
+        uses: docker/setup-buildx-action@v4.0.0
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v1
+        uses: docker/login-action@v4.1.0
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GHCR_PAT }}
 
-      - name: Build and push to GHCR
-        uses: docker/build-push-action@v2
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v7.1.0
         with:
           context: .
-          platforms: linux/amd64,linux/arm64,linux/arm/v7
           file: Dockerfile
+          platforms: ${{ matrix.platform }}
           push: true
-          tags: |
-            ${{ env.GHCR_REPO }}:latest
-            ${{ env.GHCR_REPO }}:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          provenance: false
+          sbom: false
+          outputs: type=image,name=${{ env.GHCR_REPO }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.runner }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.runner }}
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: digests-${{ matrix.runner }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          compression-level: 0
+
+  merge:
+    name: Merge multi-arch manifest
+    runs-on: ubuntu-24.04
+    needs: build
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4.0.0
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v4.1.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GHCR_PAT }}
+
+      - name: Download digests
+        uses: actions/download-artifact@v8.0.1
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Create manifest list
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create \
+            -t "${{ env.GHCR_REPO }}:latest" \
+            -t "${{ env.GHCR_REPO }}:${{ github.sha }}" \
+            $(printf '${{ env.GHCR_REPO }}@sha256:%s ' *)
+
+      - name: Inspect image
+        run: docker buildx imagetools inspect "${{ env.GHCR_REPO }}:${{ github.sha }}"

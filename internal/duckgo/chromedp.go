@@ -165,18 +165,11 @@ func executeJS(url, jsCode string, result any) error {
 // encodeToToken 将 JS 执行返回的 map 编码为最终的 vqd-hash token。
 func encodeToToken(rawJsResult map[string]any) (string, error) {
 	if hashes, ok := rawJsResult["client_hashes"].([]any); ok && len(hashes) >= 3 {
+		hashes[0] = UA
 		for i, v := range hashes {
 			if s, ok := v.(string); ok {
 				hashes[i] = sha256AndBase64(s)
 			}
-		}
-		if meta, ok := rawJsResult["meta"].(map[string]any); ok {
-			meta["origin"] = "https://duck.ai"
-			meta["duration"] = "19"
-			meta["debug"] = "\u0019\u001c"
-			// if debug, ok := meta["debug"].(string); ok {
-			// 	meta["debug"] = "\u0019\u001c"
-			// }
 		}
 	}
 

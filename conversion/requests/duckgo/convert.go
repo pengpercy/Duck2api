@@ -3,9 +3,15 @@ package duckgo
 import (
 	duckgotypes "aurora/typings/duckgo"
 	officialtypes "aurora/typings/official"
+	"crypto/rand"
+	"crypto/rsa"
+	"encoding/base64"
 	"fmt"
+	"math/big"
 	"regexp"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 func ConvertAPIRequest(apiRequest officialtypes.APIRequest) duckgotypes.ApiRequest {
@@ -17,7 +23,9 @@ func ConvertAPIRequest(apiRequest officialtypes.APIRequest) duckgotypes.ApiReque
 
 func buildMessage(apiRequest *officialtypes.APIRequest, duckgoRequest *duckgotypes.ApiRequest) {
 	duckgoRequest.CanUseTools = true
+	duckgoRequest.CanUseApproxLocation = nil
 	duckgoRequest.ReasoningEffort = "minimal"
+	duckgoRequest.DurableStream = newDurableStream()
 	if strings.HasPrefix(duckgoRequest.Model, "claude") {
 		duckgoRequest.ReasoningEffort = "none"
 	}
@@ -39,6 +47,27 @@ func buildMessage(apiRequest *officialtypes.APIRequest, duckgoRequest *duckgotyp
 		case "assistant":
 			handleAssistantMessage(msg.Content, duckgoRequest)
 		}
+	}
+}
+
+func newDurableStream() *duckgotypes.DurableStream {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil
+	}
+	pub := key.PublicKey
+	return &duckgotypes.DurableStream{
+		MessageID:      uuid.NewString(),
+		ConversationID: uuid.NewString(),
+		PublicKey: duckgotypes.PublicKey{
+			Alg:    "RSA-OAEP-256",
+			E:      base64.RawURLEncoding.EncodeToString(big.NewInt(int64(pub.E)).Bytes()),
+			Ext:    true,
+			KeyOps: []string{"encrypt"},
+			Kty:    "RSA",
+			N:      base64.RawURLEncoding.EncodeToString(pub.N.Bytes()),
+			Use:    "enc",
+		},
 	}
 }
 

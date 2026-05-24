@@ -67,12 +67,66 @@ curl --location 'http://你的服务器ip:8080/v1/chat/completions' \
 默认情况不需要设置，除非你有需求
 
 ### 环境变量
+运行时实际使用到的环境变量如下。
+
+#### 基础监听
+
+```bash
+SERVER_HOST=0.0.0.0      # 监听地址，默认 0.0.0.0
+SERVER_PORT=8080         # 监听端口，默认 8080
+PORT=8080                # 兼容 PaaS 平台；当 SERVER_PORT 未设置时使用
+PREFIX=/api              # 额外注册一组带前缀的路由，例如 /api/v1/...
 ```
 
-Authorization=your_authorization  用户认证 key。
-TLS_CERT=path_to_your_tls_cert 存储TLS（传输层安全协议）证书的路径。
-TLS_KEY=path_to_your_tls_key 存储TLS（传输层安全协议）证书的路径。
-PROXY_URL=your_proxy_url 添加代理池来。
+#### 认证与日志
+
+```bash
+Authorization=your_authorization  # API 鉴权 key；未设置时不校验
+LOG_LEVEL=INFO                    # 日志级别，例如 DEBUG/INFO/WARN/ERROR
+```
+
+#### TLS
+
+```bash
+TLS_CERT=path_to_your_tls_cert    # TLS 证书路径
+TLS_KEY=path_to_your_tls_key      # TLS 私钥路径
+```
+
+#### 代理
+
+```bash
+PROXY_URL=http://127.0.0.1:7890   # 显式代理地址
+http_proxy=http://127.0.0.1:7890  # PROXY_URL 未设置时的后备代理
+```
+
+#### Duck.ai / Chrome DevTools
+
+```bash
+DEVTOOLS_URL=ws://127.0.0.1:9222  # Chrome DevTools 远程调试地址
+DUCKAI_BROWSER_CHAT=1             # 默认 1。启用基于真实浏览器会话的请求路径
+DUCKAI_BROWSER_PREWARM=1          # 默认 1。启动后后台预热浏览器 token
+DUCKAI_DIRECT_TOKEN_BUILD=0       # 默认 0。实验开关，尝试页面内直接构造 token
+BROWSER_TOKEN_SEED_PROMPT=hi      # 浏览器 token 预热时使用的 seed prompt
+FE_VERSION=...                    # 可覆盖默认 x-fe-version
+```
+
+#### 缓存与性能
+
+```bash
+TOKEN_EXPIRATION_SECONDS=1            # challenge/token 本地缓存秒数
+SCRIPTS_CACHE_SECONDS=3600            # challenge JS 缓存秒数
+SANDBOX_CACHE_SECONDS=86400           # sandbox 页面缓存秒数
+BROWSER_TOKEN_EXPIRATION_SECONDS=1800 # 浏览器抓取 token 的缓存秒数
+```
+
+#### 启动前提
+
+如果启用了默认的浏览器路径（`DUCKAI_BROWSER_CHAT=1`），需要先启动一个带远程调试端口的 Chrome/Chromium，例如：
+
+```bash
+/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
+  --remote-debugging-port=9222 \
+  --user-data-dir=/tmp/duck2api-chrome
 ```
 
 ## 鸣谢

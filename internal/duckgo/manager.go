@@ -99,13 +99,18 @@ func NewProvider(client httpclient.AuroraHttpClient, proxyURL string) (*Provider
 		browserPageIdleTTL:   getDurationFromEnv("BROWSER_PAGE_IDLE_SECONDS", 0),
 		browserPageMaxAge:    getDurationFromEnv("BROWSER_PAGE_MAX_AGE_SECONDS", 0),
 	}
-	if os.Getenv("DUCKAI_BROWSER_CLEANUP_ON_START") == "1" {
+	if os.Getenv("DUCKAI_BROWSER_CLEANUP_ON_START") != "0" {
 		cleanupStaleDuckAITargets()
 	}
 	if os.Getenv("DUCKAI_BROWSER_CHAT") == "0" {
 		provider.warmSession()
 	} else if os.Getenv("DUCKAI_BROWSER_PREWARM") != "0" {
-		go provider.prewarmBrowserToken()
+		go func() {
+			if delay := getDurationFromEnv("DUCKAI_BROWSER_PREWARM_DELAY_SECONDS", 15*time.Second); delay > 0 {
+				time.Sleep(delay)
+			}
+			provider.prewarmBrowserToken()
+		}()
 	}
 	return provider, nil
 }

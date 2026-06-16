@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -193,4 +195,86 @@ func setupGracefulShutdown(cancel context.CancelFunc) {
 		time.Sleep(1 * time.Second)
 		os.Exit(0)
 	}()
+}
+
+type devtoolsTarget struct {
+	ID   string `json:"id"`
+	Type string `json:"type"`
+	URL  string `json:"url"`
+}
+
+func cleanupStaleDuckAITargets() {
+	baseURL, err := devtoolsHTTPBaseURL()
+	if err != nil {
+		logger.Warnf("Could not derive DevTools HTTP URL for stale tab cleanup: %v", err)
+		return
+	}
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(baseURL + "/json/list")
+	if err != nil {
+		logger.Warnf("Could not list DevTools targets for stale tab cleanup: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		logger.Warnf("DevTools target list returned status %d", resp.StatusCode)
+		return
+	}
+
+	var targets []devtoolsTarget
+	if err := json.NewDecoder(resp.Body).Decode(&targets); err != nil {
+		logger.Warnf("Could not decode DevTools target list: %v", err)
+		return
+	}
+
+	closed := 0
+	for _, target := range targets {
+		if target.ID == "" || target.Type != "page" || !isDuckAIURL(target.URL) {
+			continue
+		}
+		closeURL := baseURL + "/json/close/" + url.PathEscape(target.ID)
+		closeResp, err := client.Get(closeURL)
+		if err != nil {
+			logger.Warnf("Could not close stale Duck.ai target %s: %v", target.ID, err)
+			continue
+		}
+		closeResp.Body.Close()
+		if closeResp.StatusCode == http.StatusOK {
+			closed++
+		}
+	}
+	if closed > 0 {
+		logger.Infof("Closed %d stale Duck.ai browser page(s)", closed)
+	}
+}
+
+func devtoolsHTTPBaseURL() (string, error) {
+	raw := os.Getenv("DEVTOOLS_URL")
+	if raw == "" {
+		raw = "ws://127.0.0.1:9222"
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "", err
+	}
+	switch parsed.Scheme {
+	case "ws":
+		parsed.Scheme = "http"
+	case "wss":
+		parsed.Scheme = "https"
+	case "http", "https":
+	default:
+		return "", fmt.Errorf("unsupported DevTools URL scheme %q", parsed.Scheme)
+	}
+	parsed.Path = ""
+	parsed.RawPath = ""
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return strings.TrimRight(parsed.String(), "/"), nil
+}
+
+func isDuckAIURL(raw string) bool {
+	return strings.Contains(raw, "duck.ai/") ||
+		strings.Contains(raw, "duckduckgo.com/") && strings.Contains(raw, "duckai=1")
 }

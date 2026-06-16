@@ -56,11 +56,16 @@ type Provider struct {
 	browserListenerAttached bool
 	browserRefreshInFlight  bool
 	browserRequestHeadersCh chan network.Headers
+	browserCreatedAt        time.Time
+	browserLastUsedAt       time.Time
+	browserIdleTimer        *time.Timer
 	feVersion               string
 	// 从环境变量读取的缓存时间
 	tokenExpiration      time.Duration
 	scriptsCacheDuration time.Duration
 	sandboxCacheDuration time.Duration
+	browserPageIdleTTL   time.Duration
+	browserPageMaxAge    time.Duration
 }
 
 // getDurationFromEnv 是一个辅助函数，用于从环境变量中安全地读取时间（秒）。
@@ -91,6 +96,11 @@ func NewProvider(client httpclient.AuroraHttpClient, proxyURL string) (*Provider
 		tokenExpiration:      getDurationFromEnv("TOKEN_EXPIRATION_SECONDS", 1*time.Second),
 		scriptsCacheDuration: getDurationFromEnv("SCRIPTS_CACHE_SECONDS", 3600*time.Second),
 		sandboxCacheDuration: getDurationFromEnv("SANDBOX_CACHE_SECONDS", 86400*time.Second),
+		browserPageIdleTTL:   getDurationFromEnv("BROWSER_PAGE_IDLE_SECONDS", 10*time.Minute),
+		browserPageMaxAge:    getDurationFromEnv("BROWSER_PAGE_MAX_AGE_SECONDS", 2*time.Hour),
+	}
+	if os.Getenv("DUCKAI_BROWSER_CLEANUP_ON_START") != "0" {
+		cleanupStaleDuckAITargets()
 	}
 	if os.Getenv("DUCKAI_BROWSER_CHAT") == "0" {
 		provider.warmSession()
@@ -122,9 +132,9 @@ func (p *Provider) InvalidateCache() {
 // Close 优雅地关闭 Provider 所持有的资源，例如 ChromeDP 连接。
 func (p *Provider) Close() {
 	logger.Infof("Closing Provider resources...")
-	if p.browserCancel != nil {
-		p.browserCancel()
-	}
+	p.browserMutex.Lock()
+	p.closeBrowserPageLocked("provider close")
+	p.browserMutex.Unlock()
 	p.chromeCancel()
 }
 

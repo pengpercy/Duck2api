@@ -105,7 +105,7 @@ http_proxy=http://127.0.0.1:7890  # PROXY_URL 未设置时的后备代理
 DEVTOOLS_URL=ws://127.0.0.1:9222  # Chrome DevTools 远程调试地址
 DUCKAI_BROWSER_CHAT=1             # 默认 1。启用基于真实浏览器会话的请求路径
 DUCKAI_BROWSER_PREWARM=1          # 默认 1。启动后后台预热 challenge/token
-DUCKAI_BROWSER_CLEANUP_ON_START=1 # 默认 1。启动时清理上次残留的 Duck.ai 页面
+DUCKAI_BROWSER_CLEANUP_ON_START=0 # 默认 0。设置为 1 时启动清理上次残留的 Duck.ai 页面
 BROWSER_TOKEN_SEED_PROMPT=ping    # challenge 执行失败时，浏览器 seed fallback 使用的 prompt
 FE_VERSION=...                    # 可覆盖默认 x-fe-version
 ```
@@ -117,8 +117,8 @@ TOKEN_EXPIRATION_SECONDS=1            # challenge/token 本地缓存秒数
 SCRIPTS_CACHE_SECONDS=3600            # challenge JS 缓存秒数
 SANDBOX_CACHE_SECONDS=86400           # sandbox 页面缓存秒数
 BROWSER_TOKEN_EXPIRATION_SECONDS=1800 # 浏览器抓取 token 的缓存秒数
-BROWSER_PAGE_IDLE_SECONDS=600         # 浏览器页空闲多少秒后关闭，0 表示不关闭
-BROWSER_PAGE_MAX_AGE_SECONDS=7200     # 浏览器页最长复用秒数，0 表示不轮换
+BROWSER_PAGE_IDLE_SECONDS=0           # 默认 0。大于 0 时浏览器页空闲多少秒后关闭
+BROWSER_PAGE_MAX_AGE_SECONDS=0        # 默认 0。大于 0 时浏览器页最长复用多少秒后轮换
 ```
 
 #### 启动前提

@@ -72,7 +72,7 @@ type Provider struct {
 func getDurationFromEnv(key string, defaultValue time.Duration) time.Duration {
 	valStr := os.Getenv(key)
 	if valStr != "" {
-		if valInt, err := strconv.Atoi(valStr); err == nil && valInt > 0 {
+		if valInt, err := strconv.Atoi(valStr); err == nil && valInt >= 0 {
 			return time.Duration(valInt) * time.Second
 		}
 	}
@@ -96,10 +96,10 @@ func NewProvider(client httpclient.AuroraHttpClient, proxyURL string) (*Provider
 		tokenExpiration:      getDurationFromEnv("TOKEN_EXPIRATION_SECONDS", 1*time.Second),
 		scriptsCacheDuration: getDurationFromEnv("SCRIPTS_CACHE_SECONDS", 3600*time.Second),
 		sandboxCacheDuration: getDurationFromEnv("SANDBOX_CACHE_SECONDS", 86400*time.Second),
-		browserPageIdleTTL:   getDurationFromEnv("BROWSER_PAGE_IDLE_SECONDS", 10*time.Minute),
-		browserPageMaxAge:    getDurationFromEnv("BROWSER_PAGE_MAX_AGE_SECONDS", 2*time.Hour),
+		browserPageIdleTTL:   getDurationFromEnv("BROWSER_PAGE_IDLE_SECONDS", 0),
+		browserPageMaxAge:    getDurationFromEnv("BROWSER_PAGE_MAX_AGE_SECONDS", 0),
 	}
-	if os.Getenv("DUCKAI_BROWSER_CLEANUP_ON_START") != "0" {
+	if os.Getenv("DUCKAI_BROWSER_CLEANUP_ON_START") == "1" {
 		cleanupStaleDuckAITargets()
 	}
 	if os.Getenv("DUCKAI_BROWSER_CHAT") == "0" {

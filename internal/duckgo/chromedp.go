@@ -28,6 +28,8 @@ var (
 	globalAllocatorCtx context.Context
 )
 
+const duckAIPageURL = "https://duck.ai/?duck2api=1"
+
 // initChromedp 初始化全局的 chromedp Allocator，连接到一个已存在的 Chrome 实例。
 // 使用 sync.Once 确保这个初始化过程在整个应用生命周期中只执行一次。
 // 返回一个 cancel 函数，用于在程序退出时优雅地关闭 Allocator。
@@ -81,7 +83,7 @@ func (p *Provider) getSandboxURL() (string, string, error) {
 	`
 
 	logger.Infof("getting sanboxURL from chromedp")
-	initialURL := "https://duck.ai/"
+	initialURL := duckAIPageURL
 	var result struct {
 		SandboxURL      string         `json:"sandboxUrl"`
 		InitialJSResult map[string]any `json:"initialJsResult"`
@@ -230,7 +232,7 @@ func cleanupStaleDuckAITargets() {
 
 	closed := 0
 	for _, target := range targets {
-		if target.ID == "" || target.Type != "page" || !isDuckAIURL(target.URL) {
+		if target.ID == "" || target.Type != "page" || !shouldCleanupBrowserTarget(target.URL) {
 			continue
 		}
 		closeURL := baseURL + "/json/close/" + url.PathEscape(target.ID)
@@ -274,7 +276,32 @@ func devtoolsHTTPBaseURL() (string, error) {
 	return strings.TrimRight(parsed.String(), "/"), nil
 }
 
-func isDuckAIURL(raw string) bool {
-	return strings.Contains(raw, "duck.ai/") ||
-		strings.Contains(raw, "duckduckgo.com/") && strings.Contains(raw, "duckai=1")
+func shouldCleanupBrowserTarget(raw string) bool {
+	switch strings.ToLower(getStringFromEnv("DUCKAI_BROWSER_CLEANUP_SCOPE", "duckai")) {
+	case "duckai":
+		return isDuckAIPageURL(raw)
+	case "marked":
+		return isDuck2APIPageURL(raw)
+	default:
+		return false
+	}
+}
+
+func isDuckAIPageURL(raw string) bool {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	if parsed.Host == "duck.ai" {
+		return true
+	}
+	return strings.HasSuffix(parsed.Host, "duckduckgo.com") && parsed.Query().Get("duckai") == "1"
+}
+
+func isDuck2APIPageURL(raw string) bool {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	return parsed.Host == "duck.ai" && parsed.Query().Get("duck2api") == "1"
 }

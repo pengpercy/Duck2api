@@ -234,7 +234,7 @@ func (p *Provider) ensureBrowserPage(ctx context.Context) error {
 	p.browserCtx, p.browserCancel = chromedp.NewContext(globalAllocatorCtx)
 	if err := chromedp.Run(p.browserCtx,
 		network.Enable(),
-		chromedp.Navigate("https://duck.ai/"),
+		chromedp.Navigate(duckAIPageURL),
 		chromedp.WaitVisible("body", chromedp.ByQuery),
 		tryClickOnboardingAgree(),
 		acceptOnboarding(),

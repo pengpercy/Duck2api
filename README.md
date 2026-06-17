@@ -104,9 +104,9 @@ http_proxy=http://127.0.0.1:7890  # PROXY_URL 未设置时的后备代理
 ```bash
 DEVTOOLS_URL=ws://127.0.0.1:9222  # Chrome DevTools 远程调试地址
 DUCKAI_BROWSER_CHAT=1             # 默认 1。启用基于真实浏览器会话的请求路径
-DUCKAI_BROWSER_PREWARM=1          # 默认 1。启动后后台预热 challenge/token
-DUCKAI_BROWSER_PREWARM_DELAY_SECONDS=15 # 默认 15。延迟预热，降低启动瞬时 CPU
-DUCKAI_BROWSER_CLEANUP_ON_START=1 # 默认 1。启动时清理上次残留的浏览器页面
+DUCKAI_BROWSER_PREWARM=0          # 默认 0。设置为 1 时启动后后台预热 challenge/token
+DUCKAI_BROWSER_PREWARM_DELAY_SECONDS=15 # 默认 15。启用预热时延迟执行，降低启动瞬时 CPU
+DUCKAI_BROWSER_CLEANUP_ON_START=0 # 默认 0。设置为 1 时启动清理上次残留的浏览器页面
 DUCKAI_BROWSER_CLEANUP_SCOPE=duckai # 默认 duckai。专属浏览器清理所有 Duck.ai 页面；marked 只清理 Duck2api 标记页
 BROWSER_TOKEN_SEED_PROMPT=ping    # challenge 执行失败时，浏览器 seed fallback 使用的 prompt
 FE_VERSION=...                    # 可覆盖默认 x-fe-version

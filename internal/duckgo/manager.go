@@ -56,16 +56,11 @@ type Provider struct {
 	browserListenerAttached bool
 	browserRefreshInFlight  bool
 	browserRequestHeadersCh chan network.Headers
-	browserCreatedAt        time.Time
-	browserLastUsedAt       time.Time
-	browserIdleTimer        *time.Timer
 	feVersion               string
 	// 从环境变量读取的缓存时间
 	tokenExpiration      time.Duration
 	scriptsCacheDuration time.Duration
 	sandboxCacheDuration time.Duration
-	browserPageIdleTTL   time.Duration
-	browserPageMaxAge    time.Duration
 }
 
 // getDurationFromEnv 是一个辅助函数，用于从环境变量中安全地读取时间（秒）。
@@ -96,21 +91,11 @@ func NewProvider(client httpclient.AuroraHttpClient, proxyURL string) (*Provider
 		tokenExpiration:      getDurationFromEnv("TOKEN_EXPIRATION_SECONDS", 1*time.Second),
 		scriptsCacheDuration: getDurationFromEnv("SCRIPTS_CACHE_SECONDS", 3600*time.Second),
 		sandboxCacheDuration: getDurationFromEnv("SANDBOX_CACHE_SECONDS", 86400*time.Second),
-		browserPageIdleTTL:   getDurationFromEnv("BROWSER_PAGE_IDLE_SECONDS", 0),
-		browserPageMaxAge:    getDurationFromEnv("BROWSER_PAGE_MAX_AGE_SECONDS", 0),
-	}
-	if os.Getenv("DUCKAI_BROWSER_CLEANUP_ON_START") == "1" {
-		cleanupStaleDuckAITargets()
 	}
 	if os.Getenv("DUCKAI_BROWSER_CHAT") == "0" {
 		provider.warmSession()
 	} else if os.Getenv("DUCKAI_BROWSER_PREWARM") == "1" {
-		go func() {
-			if delay := getDurationFromEnv("DUCKAI_BROWSER_PREWARM_DELAY_SECONDS", 15*time.Second); delay > 0 {
-				time.Sleep(delay)
-			}
-			provider.prewarmBrowserToken()
-		}()
+		go provider.prewarmBrowserToken()
 	}
 	return provider, nil
 }
@@ -138,7 +123,13 @@ func (p *Provider) InvalidateCache() {
 func (p *Provider) Close() {
 	logger.Infof("Closing Provider resources...")
 	p.browserMutex.Lock()
-	p.closeBrowserPageLocked("provider close")
+	if p.browserCancel != nil {
+		p.browserCancel()
+		p.browserCtx = nil
+		p.browserCancel = nil
+		p.browserListenerAttached = false
+		p.browserRequestHeadersCh = nil
+	}
 	p.browserMutex.Unlock()
 	p.chromeCancel()
 }

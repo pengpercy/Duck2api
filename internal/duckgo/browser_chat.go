@@ -2,7 +2,6 @@ package duckgo
 
 import (
 	"aurora/httpclient"
-	"aurora/logger"
 	duckgotypes "aurora/typings/duckgo"
 	"bytes"
 	"context"
@@ -27,7 +26,6 @@ type browserTokenState struct {
 func (p *Provider) PostConversationViaBrowser(request duckgotypes.ApiRequest) (*http.Response, error) {
 	p.browserMutex.Lock()
 	defer p.browserMutex.Unlock()
-	defer p.scheduleBrowserPageIdleCloseLocked()
 
 	if p.browserToken.isValid() {
 		resp, err := p.postConversationWithBrowserToken(request)
@@ -49,7 +47,6 @@ func (p *Provider) PostConversationViaBrowser(request duckgotypes.ApiRequest) (*
 func (p *Provider) prewarmBrowserToken() {
 	p.browserMutex.Lock()
 	defer p.browserMutex.Unlock()
-	defer p.scheduleBrowserPageIdleCloseLocked()
 	if p.browserToken.isValid() {
 		return
 	}
@@ -221,12 +218,13 @@ func (p *Provider) ensureBrowserPage(ctx context.Context) error {
 	}
 
 	if p.browserCtx != nil {
-		if p.browserPageMaxAge > 0 && !p.browserCreatedAt.IsZero() && time.Since(p.browserCreatedAt) >= p.browserPageMaxAge {
-			p.closeBrowserPageLocked("max age reached")
-		} else if err := chromedp.Run(p.browserCtx, chromedp.Evaluate(`document.readyState`, nil)); err != nil {
-			p.closeBrowserPageLocked("health check failed")
+		if err := chromedp.Run(p.browserCtx, chromedp.Evaluate(`document.readyState`, nil)); err != nil {
+			p.browserCancel()
+			p.browserCtx = nil
+			p.browserCancel = nil
+			p.browserListenerAttached = false
+			p.browserRequestHeadersCh = nil
 		} else {
-			p.browserLastUsedAt = time.Now()
 			return nil
 		}
 	}
@@ -234,57 +232,15 @@ func (p *Provider) ensureBrowserPage(ctx context.Context) error {
 	p.browserCtx, p.browserCancel = chromedp.NewContext(globalAllocatorCtx)
 	if err := chromedp.Run(p.browserCtx,
 		network.Enable(),
-		chromedp.Navigate(duckAIPageURL),
+		chromedp.Navigate("https://duck.ai/"),
 		chromedp.WaitVisible("body", chromedp.ByQuery),
 		tryClickOnboardingAgree(),
 		acceptOnboarding(),
 	); err != nil {
-		p.closeBrowserPageLocked("initialization failed")
 		return err
 	}
-	p.browserCreatedAt = time.Now()
-	p.browserLastUsedAt = p.browserCreatedAt
 	p.attachBrowserListener()
 	return nil
-}
-
-func (p *Provider) closeBrowserPageLocked(reason string) {
-	if p.browserIdleTimer != nil {
-		p.browserIdleTimer.Stop()
-		p.browserIdleTimer = nil
-	}
-	if p.browserCancel != nil {
-		logger.Infof("Closing Duck.ai browser page: %s", reason)
-		p.browserCancel()
-	}
-	p.browserCtx = nil
-	p.browserCancel = nil
-	p.browserListenerAttached = false
-	p.browserRequestHeadersCh = nil
-	p.browserCreatedAt = time.Time{}
-	p.browserLastUsedAt = time.Time{}
-}
-
-func (p *Provider) scheduleBrowserPageIdleCloseLocked() {
-	if p.browserCtx == nil || p.browserPageIdleTTL <= 0 {
-		return
-	}
-	p.browserLastUsedAt = time.Now()
-	if p.browserIdleTimer != nil {
-		p.browserIdleTimer.Stop()
-	}
-	p.browserIdleTimer = time.AfterFunc(p.browserPageIdleTTL, func() {
-		p.browserMutex.Lock()
-		defer p.browserMutex.Unlock()
-		if p.browserCtx == nil || p.browserPageIdleTTL <= 0 {
-			return
-		}
-		if time.Since(p.browserLastUsedAt) < p.browserPageIdleTTL {
-			p.scheduleBrowserPageIdleCloseLocked()
-			return
-		}
-		p.closeBrowserPageLocked("idle timeout")
-	})
 }
 
 func (p *Provider) attachBrowserListener() {

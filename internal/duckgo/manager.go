@@ -67,7 +67,7 @@ type Provider struct {
 func getDurationFromEnv(key string, defaultValue time.Duration) time.Duration {
 	valStr := os.Getenv(key)
 	if valStr != "" {
-		if valInt, err := strconv.Atoi(valStr); err == nil && valInt >= 0 {
+		if valInt, err := strconv.Atoi(valStr); err == nil && valInt > 0 {
 			return time.Duration(valInt) * time.Second
 		}
 	}
@@ -94,7 +94,7 @@ func NewProvider(client httpclient.AuroraHttpClient, proxyURL string) (*Provider
 	}
 	if os.Getenv("DUCKAI_BROWSER_CHAT") == "0" {
 		provider.warmSession()
-	} else if os.Getenv("DUCKAI_BROWSER_PREWARM") == "1" {
+	} else if os.Getenv("DUCKAI_BROWSER_PREWARM") != "0" {
 		go provider.prewarmBrowserToken()
 	}
 	return provider, nil
@@ -122,15 +122,9 @@ func (p *Provider) InvalidateCache() {
 // Close 优雅地关闭 Provider 所持有的资源，例如 ChromeDP 连接。
 func (p *Provider) Close() {
 	logger.Infof("Closing Provider resources...")
-	p.browserMutex.Lock()
 	if p.browserCancel != nil {
 		p.browserCancel()
-		p.browserCtx = nil
-		p.browserCancel = nil
-		p.browserListenerAttached = false
-		p.browserRequestHeadersCh = nil
 	}
-	p.browserMutex.Unlock()
 	p.chromeCancel()
 }
 

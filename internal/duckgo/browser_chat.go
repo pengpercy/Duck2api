@@ -14,18 +14,12 @@ import (
 
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/runtime"
-	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 )
 
 type browserTokenState struct {
 	headers httpclient.AuroraHeaders
 }
-
-const (
-	browserIdleURL      = "about:blank"
-	browserReleaseDelay = 2 * time.Second
-)
 
 // PostConversationViaBrowser uses the browser only for token/challenge handling.
 // The actual user chat request is always sent through Go so upstream SSE can pass through.
@@ -223,93 +217,30 @@ func (p *Provider) ensureBrowserPage(ctx context.Context) error {
 		return errors.New("chromedp allocator not initialized")
 	}
 
-	needsNavigate := true
 	if p.browserCtx != nil {
-		var currentURL string
-		if err := chromedp.Run(p.browserCtx, chromedp.Location(&currentURL)); err != nil {
+		if err := chromedp.Run(p.browserCtx, chromedp.Evaluate(`document.readyState`, nil)); err != nil {
 			p.browserCancel()
 			p.browserCtx = nil
 			p.browserCancel = nil
 			p.browserListenerAttached = false
 			p.browserRequestHeadersCh = nil
 		} else {
-			needsNavigate = !strings.HasPrefix(currentURL, "https://duck.ai/")
+			return nil
 		}
 	}
 
-	if p.browserCtx == nil {
-		p.browserCtx, p.browserCancel = newReusableBrowserContext()
-	}
-
-	tasks := chromedp.Tasks{
+	p.browserCtx, p.browserCancel = chromedp.NewContext(globalAllocatorCtx)
+	if err := chromedp.Run(p.browserCtx,
 		network.Enable(),
-	}
-	if needsNavigate {
-		tasks = append(tasks,
-			chromedp.Navigate("https://duck.ai/"),
-			chromedp.WaitVisible("body", chromedp.ByQuery),
-			tryClickOnboardingAgree(),
-			acceptOnboarding(),
-		)
-	}
-
-	if err := chromedp.Run(p.browserCtx, tasks); err != nil {
+		chromedp.Navigate("https://duck.ai/"),
+		chromedp.WaitVisible("body", chromedp.ByQuery),
+		tryClickOnboardingAgree(),
+		acceptOnboarding(),
+	); err != nil {
 		return err
 	}
 	p.attachBrowserListener()
 	return nil
-}
-
-func newReusableBrowserContext() (context.Context, context.CancelFunc) {
-	targetID, err := findReusableBrowserTarget()
-	if err == nil && targetID != "" {
-		return chromedp.NewContext(globalAllocatorCtx, chromedp.WithTargetID(targetID))
-	}
-	return chromedp.NewContext(globalAllocatorCtx)
-}
-
-func findReusableBrowserTarget() (target.ID, error) {
-	ctx, cancel := chromedp.NewContext(globalAllocatorCtx)
-	defer cancel()
-
-	targets, err := chromedp.Targets(ctx)
-	if err != nil {
-		return "", err
-	}
-
-	var duckAI target.ID
-	for _, info := range targets {
-		if info.Type != "page" || info.Attached {
-			continue
-		}
-		switch {
-		case info.URL == "" || info.URL == browserIdleURL:
-			return info.TargetID, nil
-		case strings.HasPrefix(info.URL, "https://duck.ai/") && duckAI == "":
-			duckAI = info.TargetID
-		}
-	}
-	return duckAI, nil
-}
-
-func (p *Provider) releaseBrowserPage() {
-	if p.browserCtx == nil {
-		return
-	}
-	ctx, cancel := context.WithTimeout(p.browserCtx, 5*time.Second)
-	defer cancel()
-	if err := chromedp.Run(ctx,
-		chromedp.Sleep(browserReleaseDelay),
-		chromedp.Navigate(browserIdleURL),
-	); err != nil {
-		if p.browserCancel != nil {
-			p.browserCancel()
-		}
-		p.browserCtx = nil
-		p.browserCancel = nil
-		p.browserListenerAttached = false
-		p.browserRequestHeadersCh = nil
-	}
 }
 
 func (p *Provider) attachBrowserListener() {
@@ -340,7 +271,6 @@ func (p *Provider) buildBrowserHeadersFromChallenge(challenge string) (httpclien
 	if err := p.ensureBrowserPage(ctx); err != nil {
 		return nil, err
 	}
-	defer p.releaseBrowserPage()
 
 	challengeJSON, err := json.Marshal(challenge)
 	if err != nil {
@@ -465,7 +395,6 @@ func (p *Provider) runBrowserSeed(prompt string) (network.Headers, error) {
 	if err := p.ensureBrowserPage(ctx); err != nil {
 		return nil, err
 	}
-	defer p.releaseBrowserPage()
 
 	runCtx := p.browserCtx
 	requestHeaders := make(chan network.Headers, 1)

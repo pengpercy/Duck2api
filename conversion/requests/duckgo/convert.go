@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"math/big"
 	"regexp"
-	"strings"
 
 	"github.com/google/uuid"
 )
@@ -24,11 +23,11 @@ func ConvertAPIRequest(apiRequest officialtypes.APIRequest) duckgotypes.ApiReque
 func buildMessage(apiRequest *officialtypes.APIRequest, duckgoRequest *duckgotypes.ApiRequest) {
 	duckgoRequest.CanUseTools = true
 	duckgoRequest.CanUseApproxLocation = nil
-	duckgoRequest.ReasoningEffort = "minimal"
+	duckgoRequest.ReasoningEffort = "none"
 	duckgoRequest.DurableStream = newDurableStream()
-	if strings.HasPrefix(duckgoRequest.Model, "claude") {
-		duckgoRequest.ReasoningEffort = "none"
-	}
+	// if strings.HasPrefix(duckgoRequest.Model, "claude") {
+	// 	duckgoRequest.ReasoningEffort = "none"
+	// }
 	duckgoRequest.Metadata.ToolChoice = duckgotypes.Tool{
 		LocalSearch:     false,
 		NewsSearch:      false,

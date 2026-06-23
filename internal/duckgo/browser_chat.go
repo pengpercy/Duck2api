@@ -14,12 +14,18 @@ import (
 
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/runtime"
+	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 )
 
 type browserTokenState struct {
 	headers httpclient.AuroraHeaders
 }
+
+const (
+	browserIdleURL      = "about:blank"
+	browserReleaseDelay = 2 * time.Second
+)
 
 // PostConversationViaBrowser uses the browser only for token/challenge handling.
 // The actual user chat request is always sent through Go so upstream SSE can pass through.
@@ -217,30 +223,93 @@ func (p *Provider) ensureBrowserPage(ctx context.Context) error {
 		return errors.New("chromedp allocator not initialized")
 	}
 
+	needsNavigate := true
 	if p.browserCtx != nil {
-		if err := chromedp.Run(p.browserCtx, chromedp.Evaluate(`document.readyState`, nil)); err != nil {
+		var currentURL string
+		if err := chromedp.Run(p.browserCtx, chromedp.Location(&currentURL)); err != nil {
 			p.browserCancel()
 			p.browserCtx = nil
 			p.browserCancel = nil
 			p.browserListenerAttached = false
 			p.browserRequestHeadersCh = nil
 		} else {
-			return nil
+			needsNavigate = !strings.HasPrefix(currentURL, "https://duck.ai/")
 		}
 	}
 
-	p.browserCtx, p.browserCancel = chromedp.NewContext(globalAllocatorCtx)
-	if err := chromedp.Run(p.browserCtx,
+	if p.browserCtx == nil {
+		p.browserCtx, p.browserCancel = newReusableBrowserContext()
+	}
+
+	tasks := chromedp.Tasks{
 		network.Enable(),
-		chromedp.Navigate("https://duck.ai/"),
-		chromedp.WaitVisible("body", chromedp.ByQuery),
-		tryClickOnboardingAgree(),
-		acceptOnboarding(),
-	); err != nil {
+	}
+	if needsNavigate {
+		tasks = append(tasks,
+			chromedp.Navigate("https://duck.ai/"),
+			chromedp.WaitVisible("body", chromedp.ByQuery),
+			tryClickOnboardingAgree(),
+			acceptOnboarding(),
+		)
+	}
+
+	if err := chromedp.Run(p.browserCtx, tasks); err != nil {
 		return err
 	}
 	p.attachBrowserListener()
 	return nil
+}
+
+func newReusableBrowserContext() (context.Context, context.CancelFunc) {
+	targetID, err := findReusableBrowserTarget()
+	if err == nil && targetID != "" {
+		return chromedp.NewContext(globalAllocatorCtx, chromedp.WithTargetID(targetID))
+	}
+	return chromedp.NewContext(globalAllocatorCtx)
+}
+
+func findReusableBrowserTarget() (target.ID, error) {
+	ctx, cancel := chromedp.NewContext(globalAllocatorCtx)
+	defer cancel()
+
+	targets, err := chromedp.Targets(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	var duckAI target.ID
+	for _, info := range targets {
+		if info.Type != "page" || info.Attached {
+			continue
+		}
+		switch {
+		case info.URL == "" || info.URL == browserIdleURL:
+			return info.TargetID, nil
+		case strings.HasPrefix(info.URL, "https://duck.ai/") && duckAI == "":
+			duckAI = info.TargetID
+		}
+	}
+	return duckAI, nil
+}
+
+func (p *Provider) releaseBrowserPage() {
+	if p.browserCtx == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(p.browserCtx, 5*time.Second)
+	defer cancel()
+	if err := chromedp.Run(ctx,
+		chromedp.Sleep(browserReleaseDelay),
+		chromedp.Navigate(browserIdleURL),
+	); err != nil {
+		if p.browserCancel != nil {
+			p.browserCancel()
+		}
+		p.browserCtx = nil
+		p.browserCancel = nil
+		p.browserListenerAttached = false
+		p.browserRequestHeadersCh = nil
+	}
 }
 
 func (p *Provider) attachBrowserListener() {
@@ -271,6 +340,7 @@ func (p *Provider) buildBrowserHeadersFromChallenge(challenge string) (httpclien
 	if err := p.ensureBrowserPage(ctx); err != nil {
 		return nil, err
 	}
+	defer p.releaseBrowserPage()
 
 	challengeJSON, err := json.Marshal(challenge)
 	if err != nil {
@@ -395,6 +465,7 @@ func (p *Provider) runBrowserSeed(prompt string) (network.Headers, error) {
 	if err := p.ensureBrowserPage(ctx); err != nil {
 		return nil, err
 	}
+	defer p.releaseBrowserPage()
 
 	runCtx := p.browserCtx
 	requestHeaders := make(chan network.Headers, 1)
@@ -435,13 +506,14 @@ func prepareNewChat() chromedp.Action {
 func tryClickOnboardingAgree() chromedp.Action {
 	return chromedp.ActionFunc(func(ctx context.Context) error {
 		var exists bool
-		if err := chromedp.Evaluate(`!!document.querySelector("button[data-testid='DUCKAI_ONBOARDING_AGREE']")`, &exists).Do(ctx); err != nil {
+		const selector = `button[data-testid='DUCKAI_ONBOARDING_AGREE'], button[aria-label='Continue']`
+		if err := chromedp.Evaluate(`!!document.querySelector("`+selector+`")`, &exists).Do(ctx); err != nil {
 			return nil
 		}
 		if !exists {
 			return nil
 		}
-		if err := chromedp.Click("button[data-testid='DUCKAI_ONBOARDING_AGREE']", chromedp.ByQuery).Do(ctx); err != nil {
+		if err := chromedp.Click(selector, chromedp.ByQuery).Do(ctx); err != nil {
 			return nil
 		}
 		return chromedp.Sleep(500 * time.Millisecond).Do(ctx)
@@ -470,20 +542,48 @@ func sendPrompt(prompt string) chromedp.Action {
 	submitJS := `(async () => {
 		const sleep = ms => new Promise(r => setTimeout(r, ms));
 		const textOf = el => (el.innerText || el.textContent || el.value || '').trim();
-		for (let i = 0; i < 50; i++) {
-			const submit = document.querySelector('button[type="submit"]:not([disabled])') ||
+		const findSubmit = () => document.querySelector('button[type="submit"]:not([disabled])') ||
 				[...document.querySelectorAll('button, [role="button"]')].find(el => {
 					const label = ((el.getAttribute('aria-label') || '') + ' ' + textOf(el)).toLowerCase();
 					const disabled = el.disabled || el.getAttribute('aria-disabled') === 'true';
 					return !disabled && (label.includes('send') || label.includes('submit') || label.includes('ask'));
 				});
-			if (submit) {
-				submit.click();
+		const findContinue = () => document.querySelector("button[aria-label='Continue']") ||
+				document.querySelector("button[data-testid='DUCKAI_ONBOARDING_AGREE']") ||
+				[...document.querySelectorAll('button, [role="button"]')].find(el => {
+					const label = ((el.getAttribute('aria-label') || '') + ' ' + textOf(el)).trim().toLowerCase();
+					const disabled = el.disabled || el.getAttribute('aria-disabled') === 'true';
+					return !disabled && label === 'continue';
+				});
+		const clickSubmit = async () => {
+			for (let i = 0; i < 50; i++) {
+				const submit = findSubmit();
+				if (submit) {
+					submit.click();
+					return true;
+				}
+				await sleep(200);
+			}
+			return false;
+		};
+		if (!await clickSubmit()) {
+			throw new Error('enabled submit button not found');
+		}
+		for (let i = 0; i < 25; i++) {
+			const continueButton = findContinue();
+			if (continueButton) {
+				continueButton.click();
+				await sleep(700);
+				await clickSubmit();
+				return true;
+			}
+			const pendingSubmit = findSubmit();
+			if (!pendingSubmit) {
 				return true;
 			}
 			await sleep(200);
 		}
-		throw new Error('enabled submit button not found');
+		return true;
 	})()`
 
 	return chromedp.Tasks{

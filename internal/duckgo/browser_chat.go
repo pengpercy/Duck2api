@@ -424,7 +424,7 @@ func prepareNewChat() chromedp.Action {
 			const label = ((el.getAttribute('aria-label') || '') + ' ' + textOf(el)).toLowerCase();
 			if (label.includes('new chat') || label.includes('新聊天')) {
 				el.click();
-				await sleep(500);
+				await sleep(100);
 				return true;
 			}
 		}
@@ -457,7 +457,7 @@ func acceptOnboarding() chromedp.Action {
 			for (const el of [...document.querySelectorAll('button, [role="button"], a')]) {
 				if (textOf(el).toLowerCase().includes(needle)) {
 					el.click();
-					await sleep(700);
+					await sleep(100);
 					return true;
 				}
 			}
@@ -491,7 +491,7 @@ func sendPrompt(prompt string) chromedp.Action {
 					submit.click();
 					return true;
 				}
-				await sleep(200);
+				await sleep(100);
 			}
 			return false;
 		};
@@ -502,7 +502,7 @@ func sendPrompt(prompt string) chromedp.Action {
 			const continueButton = findContinue();
 			if (continueButton) {
 				continueButton.click();
-				await sleep(700);
+				await sleep(100);
 				await clickSubmit();
 				return true;
 			}
@@ -510,7 +510,7 @@ func sendPrompt(prompt string) chromedp.Action {
 			if (!pendingSubmit) {
 				return true;
 			}
-			await sleep(200);
+			await sleep(100);
 		}
 		return true;
 	})()`

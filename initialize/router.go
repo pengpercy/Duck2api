@@ -13,7 +13,7 @@ import (
 // 这是应用程序的启动入口。
 func RegisterRouter() *gin.Engine {
 	logger.Init()
-	// NewHandler 现在可能会因为 ChromeDP 连接失败等原因返回错误。
+	// NewHandler 可能会因为 Provider 初始化失败而返回错误。
 	// 如果初始化失败，程序必须终止，否则后续请求会因 handler 为 nil 而 panic。
 	handler, err := NewHandler(checkProxy())
 	if err != nil {

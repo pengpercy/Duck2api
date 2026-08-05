@@ -13,19 +13,19 @@ import (
 
 // MessagesRequest is the Anthropic Messages API request body.
 type MessagesRequest struct {
-	Model         string          `json:"model"`
-	Messages      []Message       `json:"messages"`
-	System        json.RawMessage `json:"system,omitempty"`
-	MaxTokens     int             `json:"max_tokens,omitempty"`
-	Stream        bool            `json:"stream,omitempty"`
-	Tools         []Tool          `json:"tools,omitempty"`
-	ToolChoice    json.RawMessage `json:"tool_choice,omitempty"`
-	Thinking      json.RawMessage `json:"thinking,omitempty"`
-	Temperature   *float64        `json:"temperature,omitempty"`
-	TopP          *float64        `json:"top_p,omitempty"`
-	TopK          int             `json:"top_k,omitempty"`
-	StopSequences []string        `json:"stop_sequences,omitempty"`
-	Metadata      json.RawMessage `json:"metadata,omitempty"`
+	Model         string            `json:"model"`
+	Messages      []Message         `json:"messages"`
+	System        json.RawMessage   `json:"system,omitempty"`
+	MaxTokens     *int              `json:"max_tokens"`
+	Stream        bool              `json:"stream,omitempty"`
+	Tools         []json.RawMessage `json:"tools,omitempty"`
+	ToolChoice    json.RawMessage   `json:"tool_choice,omitempty"`
+	Thinking      json.RawMessage   `json:"thinking,omitempty"`
+	Temperature   *float64          `json:"temperature,omitempty"`
+	TopP          *float64          `json:"top_p,omitempty"`
+	TopK          *int              `json:"top_k,omitempty"`
+	StopSequences []string          `json:"stop_sequences,omitempty"`
+	Metadata      json.RawMessage   `json:"metadata,omitempty"`
 }
 
 // Message is a single Anthropic message. Content may be a plain string or an
@@ -38,8 +38,8 @@ type Message struct {
 // ContentBlock is one block inside a message's content array.
 type ContentBlock struct {
 	Type         string          `json:"type"`
-	Text         string          `json:"text,omitempty"`
-	Source       *ImageSource    `json:"source,omitempty"`
+	Text         string          `json:"text"`
+	Source       *ContentSource  `json:"source,omitempty"`
 	ID           string          `json:"id,omitempty"`          // tool_use
 	Name         string          `json:"name,omitempty"`        // tool_use
 	Input        json.RawMessage `json:"input,omitempty"`       // tool_use
@@ -51,11 +51,14 @@ type ContentBlock struct {
 	CacheControl json.RawMessage `json:"cache_control,omitempty"`
 }
 
-// ImageSource describes a base64 image in Anthropic format.
-type ImageSource struct {
-	Type      string `json:"type"` // "base64"
-	MediaType string `json:"media_type"`
-	Data      string `json:"data"`
+// ContentSource covers the source variants accepted by Anthropic image and
+// document blocks (base64, url, file and plain_text).
+type ContentSource struct {
+	Type      string `json:"type"`
+	MediaType string `json:"media_type,omitempty"`
+	Data      string `json:"data,omitempty"`
+	URL       string `json:"url,omitempty"`
+	FileID    string `json:"file_id,omitempty"`
 }
 
 // Tool is an Anthropic tool definition.
@@ -63,6 +66,18 @@ type Tool struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
 	InputSchema json.RawMessage `json:"input_schema"`
+}
+
+// ErrorResponse is Anthropic's public error envelope.
+type ErrorResponse struct {
+	Type      string         `json:"type"`
+	Error     AnthropicError `json:"error"`
+	RequestID string         `json:"request_id,omitempty"`
+}
+
+type AnthropicError struct {
+	Type    string `json:"type"`
+	Message string `json:"message"`
 }
 
 // ---------- Non-stream response ----------
@@ -73,18 +88,51 @@ type MessagesResponse struct {
 	Type         string         `json:"type"` // "message"
 	Role         string         `json:"role"` // "assistant"
 	Model        string         `json:"model"`
+	Container    any            `json:"container"`
 	Content      []ContentBlock `json:"content"`
 	StopReason   string         `json:"stop_reason"`
 	StopSequence *string        `json:"stop_sequence"`
+	StopDetails  any            `json:"stop_details"`
 	Usage        AnthropicUsage `json:"usage"`
 }
 
 // AnthropicUsage is the usage object in Anthropic responses.
 type AnthropicUsage struct {
-	InputTokens              int `json:"input_tokens"`
-	OutputTokens             int `json:"output_tokens"`
-	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
-	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
+	CacheCreation            *CacheCreation       `json:"cache_creation"`
+	CacheCreationInputTokens int                  `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int                  `json:"cache_read_input_tokens"`
+	InferenceGeo             *string              `json:"inference_geo"`
+	InputTokens              int                  `json:"input_tokens"`
+	OutputTokens             int                  `json:"output_tokens"`
+	OutputTokensDetails      *OutputTokensDetails `json:"output_tokens_details"`
+	ServerToolUse            *ServerToolUsage     `json:"server_tool_use"`
+	ServiceTier              *string              `json:"service_tier"`
+}
+
+type CacheCreation struct {
+	Ephemeral1hInputTokens int `json:"ephemeral_1h_input_tokens"`
+	Ephemeral5mInputTokens int `json:"ephemeral_5m_input_tokens"`
+}
+
+type OutputTokensDetails struct {
+	ThinkingTokens int `json:"thinking_tokens"`
+}
+
+type ServerToolUsage struct {
+	WebFetchRequests  int `json:"web_fetch_requests"`
+	WebSearchRequests int `json:"web_search_requests"`
+}
+
+// MessageDeltaUsage is intentionally separate: in streaming responses the
+// message_delta usage object reports cumulative output tokens and does not
+// require input_tokens.
+type MessageDeltaUsage struct {
+	CacheCreationInputTokens *int                 `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     *int                 `json:"cache_read_input_tokens"`
+	InputTokens              *int                 `json:"input_tokens"`
+	OutputTokens             int                  `json:"output_tokens"`
+	OutputTokensDetails      *OutputTokensDetails `json:"output_tokens_details"`
+	ServerToolUse            *ServerToolUsage     `json:"server_tool_use"`
 }
 
 // ---------- Streaming events ----------
@@ -101,9 +149,11 @@ type AnthropicStartMessage struct {
 	Type         string         `json:"type"`
 	Role         string         `json:"role"`
 	Model        string         `json:"model"`
+	Container    any            `json:"container"`
 	Content      []ContentBlock `json:"content"`
 	StopReason   *string        `json:"stop_reason"`
 	StopSequence *string        `json:"stop_sequence"`
+	StopDetails  any            `json:"stop_details"`
 	Usage        AnthropicUsage `json:"usage"`
 }
 
@@ -126,7 +176,6 @@ type ContentDelta struct {
 	Type        string `json:"type"`
 	Text        string `json:"text,omitempty"`
 	Thinking    string `json:"thinking,omitempty"`
-	InputJSON   string `json:"input_json,omitempty"`
 	PartialJSON string `json:"partial_json,omitempty"`
 	Signature   string `json:"signature,omitempty"`
 }
@@ -139,15 +188,17 @@ type ContentBlockStopEvent struct {
 
 // MessageDeltaEvent carries the stop reason and output usage.
 type MessageDeltaEvent struct {
-	Type  string         `json:"type"`
-	Delta MessageDelta   `json:"delta"`
-	Usage AnthropicUsage `json:"usage"`
+	Type  string            `json:"type"`
+	Delta MessageDelta      `json:"delta"`
+	Usage MessageDeltaUsage `json:"usage"`
 }
 
 // MessageDelta is the delta payload inside message_delta.
 type MessageDelta struct {
 	StopReason   string  `json:"stop_reason"`
 	StopSequence *string `json:"stop_sequence"`
+	Container    any     `json:"container"`
+	StopDetails  any     `json:"stop_details"`
 }
 
 // MessageStopEvent is the final SSE event.

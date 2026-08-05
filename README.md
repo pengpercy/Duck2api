@@ -101,33 +101,17 @@ PROXY_URL=http://127.0.0.1:7890   # 显式代理地址
 http_proxy=http://127.0.0.1:7890  # PROXY_URL 未设置时的后备代理
 ```
 
-#### Duck.ai / Chrome DevTools
+#### Duck.ai
 
 ```bash
-DEVTOOLS_URL=ws://127.0.0.1:9222  # Chrome DevTools 远程调试地址
-DUCKAI_BROWSER_CHAT=1             # 默认 1。启用基于真实浏览器会话的请求路径
-DUCKAI_BROWSER_PREWARM=1          # 默认 1。启动后后台预热 challenge/token
-BROWSER_TOKEN_SEED_PROMPT=ping    # challenge 执行失败时，浏览器 seed fallback 使用的 prompt
-FE_VERSION=...                    # 可覆盖默认 x-fe-version
+FE_VERSION=... # 可覆盖默认 x-fe-version
 ```
 
 #### 缓存与性能
 
 ```bash
-TOKEN_EXPIRATION_SECONDS=1            # challenge/token 本地缓存秒数
-SCRIPTS_CACHE_SECONDS=3600            # challenge JS 缓存秒数
-SANDBOX_CACHE_SECONDS=86400           # sandbox 页面缓存秒数
-BROWSER_TOKEN_EXPIRATION_SECONDS=1800 # 浏览器抓取 token 的缓存秒数
-```
-
-#### 启动前提
-
-如果启用了默认的浏览器路径（`DUCKAI_BROWSER_CHAT=1`），需要先启动一个带远程调试端口的 Chrome/Chromium，例如：
-
-```bash
-/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
-  --remote-debugging-port=9222 \
-  --user-data-dir=/tmp/duck2api-chrome
+TOKEN_EXPIRATION_SECONDS=1 # challenge/token 本地缓存秒数
+SCRIPTS_CACHE_SECONDS=3600 # challenge JS 缓存秒数
 ```
 
 ## 鸣谢

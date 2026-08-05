@@ -1,6 +1,11 @@
 package official
 
-import "encoding/json"
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"time"
+)
 
 type ChatCompletionChunk struct {
 	ID      string    `json:"id"`
@@ -168,20 +173,27 @@ type ResponseAPI struct {
 	ID                 string                 `json:"id"`
 	Object             string                 `json:"object"`
 	CreatedAt          int64                  `json:"created_at"`
+	CompletedAt        *int64                 `json:"completed_at"`
 	Status             string                 `json:"status"`
 	Model              string                 `json:"model"`
 	Output             []ResponseOutput       `json:"output"`
-	OutputText         string                 `json:"output_text"`
-	Usage              ResponseUsage          `json:"usage"`
+	Usage              *ResponseUsage         `json:"usage"`
 	ParallelToolCalls  bool                   `json:"parallel_tool_calls"`
-	PreviousResponseID interface{}            `json:"previous_response_id"`
+	PreviousResponseID *string                `json:"previous_response_id"`
 	Error              interface{}            `json:"error"`
 	IncompleteDetails  interface{}            `json:"incomplete_details"`
 	Metadata           map[string]interface{} `json:"metadata"`
-	// Timing carries TTFT and total duration (non-standard extra field).
-	Timing *Timing `json:"timing,omitempty"`
-	// ReasoningEffort echoes the resolved thinking-effort level (non-standard extra field).
-	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+	Instructions       any                    `json:"instructions"`
+	MaxOutputTokens    *int                   `json:"max_output_tokens"`
+	Reasoning          ResponseReasoning      `json:"reasoning"`
+	Store              bool                   `json:"store"`
+	Temperature        float64                `json:"temperature"`
+	Text               any                    `json:"text"`
+	ToolChoice         any                    `json:"tool_choice"`
+	Tools              []any                  `json:"tools"`
+	TopP               float64                `json:"top_p"`
+	Truncation         string                 `json:"truncation"`
+	User               any                    `json:"user"`
 }
 
 type ResponseOutput struct {
@@ -199,24 +211,34 @@ type ResponseOutputContent struct {
 }
 
 type ResponseUsage struct {
-	InputTokens         int `json:"input_tokens"`
-	OutputTokens        int `json:"output_tokens"`
-	TotalTokens         int `json:"total_tokens"`
-	InputTokensDetails  any `json:"input_tokens_details,omitempty"`
-	OutputTokensDetails any `json:"output_tokens_details,omitempty"`
+	InputTokens         int                        `json:"input_tokens"`
+	OutputTokens        int                        `json:"output_tokens"`
+	TotalTokens         int                        `json:"total_tokens"`
+	InputTokensDetails  ResponseInputTokenDetails  `json:"input_tokens_details"`
+	OutputTokensDetails ResponseOutputTokenDetails `json:"output_tokens_details"`
+}
+
+type ResponseInputTokenDetails struct {
+	CachedTokens     int `json:"cached_tokens"`
+	CacheWriteTokens int `json:"cache_write_tokens"`
+}
+
+type ResponseOutputTokenDetails struct {
+	ReasoningTokens int `json:"reasoning_tokens"`
 }
 
 type ResponseStreamEvent struct {
 	Type         string          `json:"type"`
-	Sequence     int             `json:"sequence_number,omitempty"`
+	Sequence     int             `json:"sequence_number"`
 	Response     *ResponseAPI    `json:"response,omitempty"`
 	Item         *ResponseOutput `json:"item,omitempty"`
 	ItemID       string          `json:"item_id,omitempty"`
 	Part         any             `json:"part,omitempty"`
-	OutputIndex  int             `json:"output_index,omitempty"`
-	ContentIndex int             `json:"content_index,omitempty"`
-	Delta        string          `json:"delta,omitempty"`
-	Text         string          `json:"text,omitempty"`
+	OutputIndex  *int            `json:"output_index,omitempty"`
+	ContentIndex *int            `json:"content_index,omitempty"`
+	Delta        *string         `json:"delta,omitempty"`
+	Text         *string         `json:"text,omitempty"`
+	Logprobs     *[]any          `json:"logprobs,omitempty"`
 }
 
 func (event ResponseStreamEvent) String() string {
@@ -225,44 +247,86 @@ func (event ResponseStreamEvent) String() string {
 }
 
 func NewResponseAPIWithModel(text string, model string) ResponseAPI {
-	return NewResponseAPIFull(text, model, 0, 0, 0, 0, 0, "")
+	return NewResponseAPIFull(text, model, 0, 0, 0, "")
 }
 
-// NewResponseAPIFull builds a non-stream ResponseAPI with usage, cache breakdown and timing.
-func NewResponseAPIFull(text, model string, inputTokens, outputTokens, cachedTokens, ttftMs, totalMs int64, effort string) ResponseAPI {
-	var inputDetails any
-	if cachedTokens > 0 {
-		inputDetails = map[string]interface{}{"cached_tokens": cachedTokens}
+// NewResponseAPIFull builds a completed Response with usage details.
+func NewResponseAPIFull(text, model string, inputTokens, outputTokens, cachedTokens int64, effort string) ResponseAPI {
+	createdAt := time.Now().Unix()
+	completedAt := createdAt
+	var effortValue *string
+	if effort != "" {
+		effortValue = &effort
 	}
 	return ResponseAPI{
-		ID:        "resp_QXlha2FBbmROaXhpZUFyZUF3ZXNvbWUK",
-		Object:    "response",
-		CreatedAt: 0,
-		Status:    "completed",
-		Model:     model,
+		ID:          newResponseID("resp_"),
+		Object:      "response",
+		CreatedAt:   createdAt,
+		CompletedAt: &completedAt,
+		Status:      "completed",
+		Model:       model,
 		Output: []ResponseOutput{
 			NewResponseOutput(text),
 		},
-		OutputText: text,
-		Usage: ResponseUsage{
-			InputTokens:        int(inputTokens),
-			OutputTokens:       int(outputTokens),
-			TotalTokens:        int(inputTokens + outputTokens),
-			InputTokensDetails: inputDetails,
+		Usage: &ResponseUsage{
+			InputTokens:         int(inputTokens),
+			OutputTokens:        int(outputTokens),
+			TotalTokens:         int(inputTokens + outputTokens),
+			InputTokensDetails:  ResponseInputTokenDetails{CachedTokens: int(cachedTokens)},
+			OutputTokensDetails: ResponseOutputTokenDetails{},
 		},
 		ParallelToolCalls: true,
 		Metadata:          map[string]interface{}{},
-		Timing: &Timing{
-			TTFTMs:  ttftMs,
-			TotalMs: totalMs,
-		},
-		ReasoningEffort: effort,
+		Reasoning:         ResponseReasoning{Effort: effortValue},
+		Store:             true,
+		Temperature:       1,
+		Text:              map[string]any{"format": map[string]any{"type": "text"}},
+		ToolChoice:        "auto",
+		Tools:             []any{},
+		TopP:              1,
+		Truncation:        "disabled",
+	}
+}
+
+func (response *ResponseAPI) ApplyRequest(request ResponseAPIRequest) {
+	response.Instructions = request.Instructions
+	response.PreviousResponseID = request.PreviousResponseID
+	if request.Metadata != nil {
+		response.Metadata = request.Metadata
+	}
+	response.MaxOutputTokens = request.MaxOutputTokens
+	if request.ParallelToolCalls != nil {
+		response.ParallelToolCalls = *request.ParallelToolCalls
+	}
+	if request.Store != nil {
+		response.Store = *request.Store
+	}
+	if request.Temperature != nil {
+		response.Temperature = *request.Temperature
+	}
+	if request.TopP != nil {
+		response.TopP = *request.TopP
+	}
+	if request.Reasoning != nil {
+		response.Reasoning = *request.Reasoning
+	}
+	if request.Text != nil {
+		response.Text = request.Text
+	}
+	if request.ToolChoice != nil {
+		response.ToolChoice = request.ToolChoice
+	}
+	if request.Tools != nil {
+		response.Tools = request.Tools
+	}
+	if request.Truncation != "" {
+		response.Truncation = request.Truncation
 	}
 }
 
 func NewResponseOutput(text string) ResponseOutput {
 	return ResponseOutput{
-		ID:     "msg_QXlha2FBbmROaXhpZUFyZUF3ZXNvbWUK",
+		ID:     newResponseID("msg_"),
 		Type:   "message",
 		Status: "completed",
 		Role:   "assistant",
@@ -274,6 +338,14 @@ func NewResponseOutput(text string) ResponseOutput {
 			},
 		},
 	}
+}
+
+func newResponseID(prefix string) string {
+	random := make([]byte, 24)
+	if _, err := rand.Read(random); err != nil {
+		return prefix + hex.EncodeToString([]byte(time.Now().Format(time.RFC3339Nano)))
+	}
+	return prefix + hex.EncodeToString(random)
 }
 
 func NewChatCompletionWithModel(text string, model string) ChatCompletion {

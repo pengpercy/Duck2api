@@ -111,17 +111,47 @@ func ToOpenAPIRequest(req MessagesRequest) officialtypes.APIRequest {
 		out.Messages = append(out.Messages, converted...)
 	}
 
+	for _, rawTool := range req.Tools {
+		var tool struct {
+			Type string `json:"type"`
+			Name string `json:"name"`
+		}
+		if json.Unmarshal(rawTool, &tool) == nil &&
+			(strings.HasPrefix(tool.Type, "web_search_") || tool.Type == "web_search" || tool.Name == "web_search") {
+			enabled := true
+			out.WebSearch = &enabled
+			break
+		}
+	}
+
 	return out
 }
 
 // toImagePart builds an OpenAI image_url content part from an Anthropic image source.
-func toImagePart(src *ImageSource) map[string]interface{} {
+func toImagePart(src *ContentSource) map[string]interface{} {
+	url := src.URL
+	if src.Type == "base64" && src.Data != "" {
+		url = fmt.Sprintf("data:%s;base64,%s", src.MediaType, src.Data)
+	}
 	return map[string]interface{}{
 		"type": "image_url",
 		"image_url": map[string]interface{}{
-			"url": fmt.Sprintf("data:%s;base64,%s", src.MediaType, src.Data),
+			"url": url,
 		},
 	}
+}
+
+func toDocumentPart(src *ContentSource) map[string]interface{} {
+	part := map[string]interface{}{"type": "input_file"}
+	switch src.Type {
+	case "file":
+		part["file_id"] = src.FileID
+	case "url":
+		part["file_url"] = src.URL
+	case "base64":
+		part["file_data"] = fmt.Sprintf("data:%s;base64,%s", src.MediaType, src.Data)
+	}
+	return part
 }
 
 // convertBlocks turns Anthropic content blocks into one or more OpenAI messages.
@@ -129,7 +159,7 @@ func toImagePart(src *ImageSource) map[string]interface{} {
 // blocks are folded into text so conversation context is preserved.
 func convertBlocks(role string, blocks []ContentBlock) []officialtypes.ApiMessage {
 	var textParts []string
-	var imageParts []map[string]interface{}
+	var mediaParts []map[string]interface{}
 
 	for _, b := range blocks {
 		switch b.Type {
@@ -138,8 +168,28 @@ func convertBlocks(role string, blocks []ContentBlock) []officialtypes.ApiMessag
 				textParts = append(textParts, b.Text)
 			}
 		case "image":
-			if b.Source != nil && b.Source.Data != "" {
-				imageParts = append(imageParts, toImagePart(b.Source))
+			if b.Source != nil {
+				switch b.Source.Type {
+				case "base64", "url":
+					if b.Source.Data != "" || b.Source.URL != "" {
+						mediaParts = append(mediaParts, toImagePart(b.Source))
+					}
+				case "file":
+					if b.Source.FileID != "" {
+						mediaParts = append(mediaParts, toDocumentPart(b.Source))
+					}
+				}
+			}
+		case "document":
+			if b.Source == nil {
+				continue
+			}
+			if b.Source.Type == "text" || b.Source.Type == "plain_text" || b.Source.Type == "content" {
+				if b.Source.Data != "" {
+					textParts = append(textParts, b.Source.Data)
+				}
+			} else if b.Source.Data != "" || b.Source.URL != "" || b.Source.FileID != "" {
+				mediaParts = append(mediaParts, toDocumentPart(b.Source))
 			}
 		case "thinking":
 			// No CoT upstream; drop the thinking block (effort is mapped at the
@@ -158,7 +208,7 @@ func convertBlocks(role string, blocks []ContentBlock) []officialtypes.ApiMessag
 		}
 	}
 
-	content := buildContent(textParts, imageParts)
+	content := buildContent(textParts, mediaParts)
 	if content == nil {
 		return nil
 	}
@@ -167,9 +217,9 @@ func convertBlocks(role string, blocks []ContentBlock) []officialtypes.ApiMessag
 
 // buildContent assembles the final Content value: plain string for text-only,
 // array for mixed/multimodal.
-func buildContent(textParts []string, imageParts []map[string]interface{}) interface{} {
+func buildContent(textParts []string, mediaParts []map[string]interface{}) interface{} {
 	text := strings.Join(textParts, "\n")
-	if len(imageParts) == 0 {
+	if len(mediaParts) == 0 {
 		if text == "" {
 			return nil
 		}
@@ -179,8 +229,8 @@ func buildContent(textParts []string, imageParts []map[string]interface{}) inter
 	if text != "" {
 		parts = append(parts, map[string]interface{}{"type": "text", "text": text})
 	}
-	for _, imagePart := range imageParts {
-		parts = append(parts, imagePart)
+	for _, mediaPart := range mediaParts {
+		parts = append(parts, mediaPart)
 	}
 	return parts
 }

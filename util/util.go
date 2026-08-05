@@ -1,9 +1,15 @@
 package util
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"log/slog"
 	"math/rand"
+	"strings"
+	"sync"
 	"time"
+
+	officialtypes "aurora/typings/official"
 
 	"github.com/pkoukk/tiktoken-go"
 )
@@ -37,4 +43,118 @@ func CountToken(input string) int {
 	}
 	token := tkm.Encode(input, nil, nil)
 	return len(token)
+}
+
+// CountMessagesTokens counts input tokens for an array of API messages.
+func CountMessagesTokens(messages []officialtypes.ApiMessage) int {
+	var sb strings.Builder
+	for _, msg := range messages {
+		sb.WriteString(MessageText(msg.Content))
+		sb.WriteString("\n")
+	}
+	return CountToken(sb.String())
+}
+
+// MessageText extracts plain text from a message content (string or multipart array).
+func MessageText(content interface{}) string {
+	if content == nil {
+		return ""
+	}
+	if s, ok := content.(string); ok {
+		return s
+	}
+	if parts, ok := content.([]interface{}); ok {
+		var sb strings.Builder
+		for _, p := range parts {
+			pm, ok := p.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			typ, _ := pm["type"].(string)
+			switch typ {
+			case "text", "":
+				if t, ok := pm["text"].(string); ok {
+					sb.WriteString(t)
+				}
+			}
+		}
+		return sb.String()
+	}
+	return ""
+}
+
+// ---------- Prompt cache simulation ----------
+
+// cacheTTL how long a cached prompt prefix stays "warm".
+const cacheTTL = 5 * time.Minute
+
+type cacheEntry struct {
+	tokens    int
+	createdAt time.Time // when the entry was created (for Age header)
+	expiresAt time.Time
+}
+
+var (
+	cacheMu    sync.Mutex
+	cacheStore = make(map[string]cacheEntry)
+)
+
+// RecordCache returns (cacheCreation, cacheRead) token counts for a prompt.
+// First time a prompt hash is seen → cacheCreation = tokens (cache populated).
+// Same hash seen again within TTL → cacheRead = tokens (cache hit).
+func RecordCache(promptHash string, tokens int) (cacheCreation int, cacheRead int) {
+	if promptHash == "" || tokens <= 0 {
+		return 0, 0
+	}
+	cacheMu.Lock()
+	defer cacheMu.Unlock()
+
+	// opportunistic cleanup
+	now := time.Now()
+	for k, v := range cacheStore {
+		if now.After(v.expiresAt) {
+			delete(cacheStore, k)
+		}
+	}
+
+	if e, ok := cacheStore[promptHash]; ok && now.Before(e.expiresAt) {
+		return 0, e.tokens
+	}
+	cacheStore[promptHash] = cacheEntry{tokens: tokens, createdAt: now, expiresAt: now.Add(cacheTTL)}
+	return tokens, 0
+}
+
+// CacheStatus reports whether a prompt hash is currently cached (HIT vs MISS)
+// and how many seconds ago the entry was created (for the Age header).
+// Returns (hit bool, ageSeconds int). ageSeconds is 0 when not hit.
+func CacheStatus(promptHash string) (hit bool, ageSeconds int) {
+	if promptHash == "" {
+		return false, 0
+	}
+	cacheMu.Lock()
+	defer cacheMu.Unlock()
+
+	now := time.Now()
+	if e, ok := cacheStore[promptHash]; ok && now.Before(e.expiresAt) {
+		return true, int(now.Sub(e.createdAt).Seconds())
+	}
+	return false, 0
+}
+
+// CacheHeaders returns the standard HTTP cache headers so external
+// cache-statistics/monitoring software (Varnish, Squid, CDNs) can read them.
+//   - X-Cache: "HIT" or "MISS"
+//   - Age: <seconds> (omitted on MISS)
+func CacheHeaders(promptHash string) (xCache string, ageSeconds int) {
+	hit, age := CacheStatus(promptHash)
+	if hit {
+		return "HIT", age
+	}
+	return "MISS", 0
+}
+
+// HashPrompt builds a stable hash for prompt cache keying.
+func HashPrompt(s string) string {
+	h := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(h[:])
 }

@@ -38,6 +38,13 @@ func NewHandler(proxy *proxys.IProxy) (*Handler, error) {
 	}
 
 	logger.Debugf("Provider initialized successfully.")
+	duckgoConvert.FileStore = func(fileID string) (string, string, []byte, bool) {
+		file, ok := getFile(fileID)
+		if !ok {
+			return "", "", nil, false
+		}
+		return file.Filename, file.MimeType, file.Bytes, true
+	}
 	return &Handler{
 		duckgoProvider: provider,
 	}, nil
@@ -62,12 +69,17 @@ func (h *Handler) duckduckgo(c *gin.Context) {
 		}})
 		return
 	}
+	if err := attachFiles(&original_request); err != nil {
+		apiError(c, 400, err.Error(), "file_not_found")
+		return
+	}
 	bodyJSON, err := json.Marshal(original_request)
 	if err == nil && bodyJSON != nil {
 		logger.Debugf(string(bodyJSON))
 	}
 	// 将 OpenAI 格式的请求转换为 DuckDuckGo 格式
-	translatedRequest := duckgoConvert.ConvertAPIRequest(original_request)
+	webSearch := original_request.WebSearch != nil && *original_request.WebSearch
+	translatedRequest := duckgoConvert.ConvertAPIRequestWithOptions(original_request, original_request.ReasoningEffort, webSearch)
 
 	// 调用 Provider 的方法来处理会话。
 	// Token 获取、缓存、刷新等所有复杂逻辑都在 Provider 内部自动完成。
@@ -96,9 +108,11 @@ func (h *Handler) engines(c *gin.Context) {
 	// 此处为了简洁，直接硬编码模型列表。
 	// 在实际应用中，可以考虑从配置或 Provider 中获取。
 	supportedModels := []string{
-		"gpt-4o-mini",
-		"gpt-5-mini",
+		"gpt-5.4-mini",
+		"gpt-5.4-nano",
+		"tinfoil/gpt-oss-120b",
 		"claude-haiku-4-5",
+		"mistral-small",
 	}
 
 	data := make([]gin.H, len(supportedModels))

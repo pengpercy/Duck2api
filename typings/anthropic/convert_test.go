@@ -45,3 +45,53 @@ func TestThinkingToEffort(t *testing.T) {
 		}
 	}
 }
+
+func TestToOpenAPIRequestSupportsServerWebSearchAndSourceVariants(t *testing.T) {
+	maxTokens := 100
+	req := MessagesRequest{
+		Model:     "claude-haiku-4-5",
+		MaxTokens: &maxTokens,
+		Tools:     []json.RawMessage{json.RawMessage(`{"type":"web_search_20250305","name":"web_search","max_uses":5}`)},
+		Messages: []Message{{Role: "user", Content: json.RawMessage(`[
+			{"type":"image","source":{"type":"url","url":"https://example.com/image.png"}},
+			{"type":"document","source":{"type":"file","file_id":"file_123"}}
+		]`)}},
+	}
+	got := ToOpenAPIRequest(req)
+	if got.WebSearch == nil || !*got.WebSearch {
+		t.Fatal("web_search server tool was not enabled")
+	}
+	encoded, _ := json.Marshal(got.Messages)
+	for _, want := range []string{"https://example.com/image.png", "file_123", "input_file"} {
+		if !strings.Contains(string(encoded), want) {
+			t.Fatalf("missing %q from %s", want, encoded)
+		}
+	}
+}
+
+func TestValidateMessagesRequest(t *testing.T) {
+	maxTokens := 64
+	valid := MessagesRequest{
+		Model: "claude-haiku-4-5", MaxTokens: &maxTokens,
+		Messages: []Message{{Role: "user", Content: json.RawMessage(`"hello"`)}},
+	}
+	if err := ValidateMessagesRequest(valid); err != nil {
+		t.Fatalf("valid request rejected: %v", err)
+	}
+	missingMax := valid
+	missingMax.MaxTokens = nil
+	if err := ValidateMessagesRequest(missingMax); err == nil || !strings.Contains(err.Error(), "max_tokens") {
+		t.Fatalf("missing max_tokens error=%v", err)
+	}
+	zero := 0
+	cacheOnly := valid
+	cacheOnly.MaxTokens = &zero
+	if err := ValidateMessagesRequest(cacheOnly); err != nil {
+		t.Fatalf("max_tokens=0 should be valid: %v", err)
+	}
+	badRole := valid
+	badRole.Messages = []Message{{Role: "system", Content: json.RawMessage(`"hello"`)}}
+	if err := ValidateMessagesRequest(badRole); err == nil || !strings.Contains(err.Error(), "role") {
+		t.Fatalf("invalid role error=%v", err)
+	}
+}

@@ -22,7 +22,7 @@ type Handler struct {
 
 // NewHandler 是 Handler 的构造函数。
 // 它负责初始化所有必要的依赖，包括 HTTP 客户端和核心的 duckgo.Provider。
-// 由于 Provider 的初始化（特别是 ChromeDP）可能会失败，因此该函数返回一个 error。
+// Provider 初始化失败时返回 error。
 func NewHandler(proxy *proxys.IProxy) (*Handler, error) {
 	// 1. 获取代理地址
 	proxyUrl := proxy.GetProxyIP()

@@ -71,7 +71,8 @@ func ConvertAPIRequestWithOptions(apiRequest officialtypes.APIRequest, reasoning
 		duckgoRequest.Metadata.ToolChoice.WebSearch = true
 	}
 
-	for _, message := range apiRequest.Messages {
+	for i := 0; i < len(apiRequest.Messages); i++ {
+		message := apiRequest.Messages[i]
 		role := message.Role
 		if role == "system" {
 			role = "user"
@@ -81,6 +82,10 @@ func ConvertAPIRequestWithOptions(apiRequest officialtypes.APIRequest, reasoning
 		}
 
 		parts := extractContentParts(message.Content)
+		if i == 0 && message.Role == "system" && len(apiRequest.Messages) > 1 && apiRequest.Messages[1].Role == "user" {
+			parts = append(parts, extractContentParts(apiRequest.Messages[1].Content)...)
+			i++
+		}
 		if len(parts) > 0 {
 			duckgoRequest.AddMessageWithParts(role, parts)
 		}
@@ -159,7 +164,8 @@ func extractContentParts(content interface{}) []duckgotypes.ContentPart {
 					})
 				}
 			case "input_file":
-				// OpenAI format: {"type":"input_file","file_id":"file-xxx"}
+				// OpenAI/Responses-compatible file references. Anthropic document
+				// blocks are normalized to the same shape by its adapter.
 				if fileID, ok := elementMap["file_id"].(string); ok && fileID != "" {
 					log.Printf("[DEBUG] input_file: file_id=%s", fileID)
 					if FileStore != nil {
@@ -194,6 +200,33 @@ func extractContentParts(content interface{}) []duckgotypes.ContentPart {
 						Type: "text",
 						Text: "[file:" + fileID + "]",
 					})
+					continue
+				}
+				if fileData, ok := elementMap["file_data"].(string); ok && strings.HasPrefix(fileData, "data:") {
+					comma := strings.Index(fileData, ",")
+					semicolon := strings.Index(fileData, ";")
+					if comma > 0 {
+						mimeType := "application/octet-stream"
+						if semicolon > 5 && semicolon < comma {
+							mimeType = fileData[5:semicolon]
+						}
+						if decoded, err := base64.StdEncoding.DecodeString(fileData[comma+1:]); err == nil {
+							if strings.HasPrefix(mimeType, "image/") {
+								webpData := convertToWebP(decoded, mimeType)
+								parts = append(parts, duckgotypes.ContentPart{Type: "image", Image: "data:image/webp;base64," + base64.StdEncoding.EncodeToString(webpData), MimeType: "image/webp"})
+							} else {
+								fileText := extractTextContent(decoded, mimeType)
+								if len(fileText) > 50000 {
+									fileText = fileText[:50000] + "\n...(truncated)"
+								}
+								parts = append(parts, duckgotypes.ContentPart{Type: "text", Text: "[Document]\n" + fileText})
+							}
+						}
+					}
+					continue
+				}
+				if fileURL, ok := elementMap["file_url"].(string); ok && fileURL != "" {
+					parts = append(parts, duckgotypes.ContentPart{Type: "text", Text: "[Document URL: " + fileURL + "]"})
 				}
 			}
 		}

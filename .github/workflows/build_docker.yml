@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - lab_dev
     paths-ignore:
       - 'README.md'
   workflow_dispatch:
@@ -42,7 +43,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
-          password: ${{ secrets.GHCR_PAT }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push by digest
         id: build
@@ -88,7 +89,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
-          password: ${{ secrets.GHCR_PAT }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download digests
         uses: actions/download-artifact@v8.0.1

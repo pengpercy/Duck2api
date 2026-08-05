@@ -300,17 +300,11 @@ curl http://localhost:8080/ping
 | `PROXY_URL` | 空 | 上游代理；其次读取 `http_proxy` |
 | `TLS_CERT` / `TLS_KEY` | 空 | HTTPS 证书与私钥 |
 | `LOG_LEVEL` | — | 日志级别 |
-| `DEVTOOLS_URL` | — | Chrome DevTools WebSocket 地址 |
-| `DUCKAI_BROWSER_CHAT` | `1` | `0` 时使用直接 HTTP/VQD 路径 |
-| `DUCKAI_BROWSER_PREWARM` | `1` | 浏览器 token 后台预热 |
 | `FE_VERSION` | 内置值 | 覆盖 Duck.ai 前端版本 |
 | `TOKEN_EXPIRATION_SECONDS` | `1` | VQD token 缓存 |
 | `SCRIPTS_CACHE_SECONDS` | `3600` | challenge JS 缓存 |
-| `SANDBOX_CACHE_SECONDS` | `86400` | sandbox URL 缓存 |
-| `BROWSER_TOKEN_EXPIRATION_SECONDS` | `1800` | 浏览器 token 缓存 |
-| `BROWSER_TOKEN_SEED_PROMPT` | `ping` | 浏览器 challenge fallback 的 seed prompt |
 | `CLAUDE_CODE_EFFORT_LEVEL` | 空 | Anthropic 未提供 `thinking` 时的默认推理档位 |
 
 代理优先级为：`PROXY_URL`、项目目录中的 `proxies.txt`（逐行轮询）、`http_proxy`。
 
-默认浏览器聊天路径需要一个可用的 Chrome/Chromium DevTools 会话。若设置 `DUCKAI_BROWSER_CHAT=0`，聊天及其他接口仍然使用当前项目的直接 VQD 获取和缓存实现。
+聊天及其他 Duck.ai 接口使用内嵌 Goja 运行时计算 VQD challenge，不依赖 Chrome/Chromium。

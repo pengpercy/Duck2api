@@ -13,6 +13,7 @@ import (
 	duckgoConvert "aurora/conversion/requests/duckgo"
 	"aurora/internal/duckgo"
 	officialtypes "aurora/typings/official"
+	"aurora/util"
 
 	"github.com/gin-gonic/gin"
 )
@@ -60,7 +61,9 @@ func (h *Handler) responses(c *gin.Context) {
 		apiError(c, 400, "input is required", "missing_input")
 		return
 	}
-	translated := duckgoConvert.ConvertAPIRequestWithOptions(chat, request.ReasoningEffort, false)
+	inputTokens := util.CountMessagesTokens(chat.Messages)
+	webSearch := chat.WebSearch != nil && *chat.WebSearch
+	translated := duckgoConvert.ConvertAPIRequestWithOptions(chat, chat.ReasoningEffort, webSearch)
 	resp, err := h.duckgoProvider.PostConversation(translated)
 	if err != nil {
 		apiError(c, 502, "Failed to post conversation: "+err.Error(), "upstream_error")
@@ -72,24 +75,34 @@ func (h *Handler) responses(c *gin.Context) {
 	}
 	if !request.Stream {
 		text := duckgo.StreamHandler(c, resp, translated, false)
-		c.JSON(200, officialtypes.NewResponseAPIWithModel(text, translated.Model))
+		response := officialtypes.NewResponseAPIFull(text, translated.Model, int64(inputTokens), int64(util.CountToken(text)), 0, chat.ReasoningEffort)
+		response.ApplyRequest(request)
+		c.JSON(200, response)
 		return
 	}
-	h.responsesStream(c, resp.Body, translated.Model)
+	h.responsesStream(c, resp.Body, translated.Model, request, inputTokens)
 }
 
-func (h *Handler) responsesStream(c *gin.Context, body io.Reader, model string) {
-	c.Header("Content-Type", "text/event-stream")
+func (h *Handler) responsesStream(c *gin.Context, body io.Reader, model string, request officialtypes.ResponseAPIRequest, inputTokens int) {
+	c.Header("Content-Type", "text/event-stream; charset=utf-8")
 	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no")
+	zero := 0
+	emptyLogprobs := []any{}
 	created := officialtypes.NewResponseAPIWithModel("", model)
+	created.ApplyRequest(request)
 	created.Status = "in_progress"
-	created.Output = nil
+	created.CompletedAt = nil
+	created.Output = []officialtypes.ResponseOutput{}
+	created.Usage = nil
 	writeResponseEvent(c, officialtypes.ResponseStreamEvent{Type: "response.created", Sequence: 1, Response: &created})
 	out := officialtypes.NewResponseOutput("")
 	out.Status = "in_progress"
-	writeResponseEvent(c, officialtypes.ResponseStreamEvent{Type: "response.output_item.added", Sequence: 2, OutputIndex: 0, Item: &out})
+	out.Content = []officialtypes.ResponseOutputContent{}
+	writeResponseEvent(c, officialtypes.ResponseStreamEvent{Type: "response.output_item.added", Sequence: 2, OutputIndex: &zero, Item: &out})
 	part := officialtypes.ResponseOutputContent{Type: "output_text", Text: "", Annotations: []interface{}{}}
-	writeResponseEvent(c, officialtypes.ResponseStreamEvent{Type: "response.content_part.added", Sequence: 3, ItemID: out.ID, OutputIndex: 0, ContentIndex: 0, Part: part})
+	writeResponseEvent(c, officialtypes.ResponseStreamEvent{Type: "response.content_part.added", Sequence: 3, ItemID: out.ID, OutputIndex: &zero, ContentIndex: &zero, Part: part})
 	reader := bufio.NewScanner(body)
 	var full strings.Builder
 	seq := 4
@@ -109,17 +122,22 @@ func (h *Handler) responsesStream(c *gin.Context, body io.Reader, model string) 
 			continue
 		}
 		full.WriteString(d.Message)
-		writeResponseEvent(c, officialtypes.ResponseStreamEvent{Type: "response.output_text.delta", Sequence: seq, ItemID: out.ID, OutputIndex: 0, ContentIndex: 0, Delta: d.Message})
+		delta := d.Message
+		writeResponseEvent(c, officialtypes.ResponseStreamEvent{Type: "response.output_text.delta", Sequence: seq, ItemID: out.ID, OutputIndex: &zero, ContentIndex: &zero, Delta: &delta, Logprobs: &emptyLogprobs})
 		seq++
 	}
 	text := full.String()
-	done := officialtypes.NewResponseAPIWithModel(text, model)
-	writeResponseEvent(c, officialtypes.ResponseStreamEvent{Type: "response.output_text.done", Sequence: seq, ItemID: out.ID, Text: text})
+	done := officialtypes.NewResponseAPIFull(text, model, int64(inputTokens), int64(util.CountToken(text)), 0, request.ResolvedReasoningEffort())
+	done.ApplyRequest(request)
+	done.ID = created.ID
+	done.CreatedAt = created.CreatedAt
+	done.Output[0].ID = out.ID
+	writeResponseEvent(c, officialtypes.ResponseStreamEvent{Type: "response.output_text.done", Sequence: seq, ItemID: out.ID, OutputIndex: &zero, ContentIndex: &zero, Text: &text, Logprobs: &emptyLogprobs})
 	seq++
 	donePart := officialtypes.ResponseOutputContent{Type: "output_text", Text: text, Annotations: []interface{}{}}
-	writeResponseEvent(c, officialtypes.ResponseStreamEvent{Type: "response.content_part.done", Sequence: seq, ItemID: out.ID, OutputIndex: 0, ContentIndex: 0, Part: donePart})
+	writeResponseEvent(c, officialtypes.ResponseStreamEvent{Type: "response.content_part.done", Sequence: seq, ItemID: out.ID, OutputIndex: &zero, ContentIndex: &zero, Part: donePart})
 	seq++
-	writeResponseEvent(c, officialtypes.ResponseStreamEvent{Type: "response.output_item.done", Sequence: seq, OutputIndex: 0, Item: &done.Output[0]})
+	writeResponseEvent(c, officialtypes.ResponseStreamEvent{Type: "response.output_item.done", Sequence: seq, OutputIndex: &zero, Item: &done.Output[0]})
 	seq++
 	writeResponseEvent(c, officialtypes.ResponseStreamEvent{Type: "response.completed", Sequence: seq, Response: &done})
 }

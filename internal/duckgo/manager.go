@@ -5,7 +5,6 @@ import (
 	"aurora/logger"
 	duckgotypes "aurora/typings/duckgo"
 	"bytes"
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -17,8 +16,6 @@ import (
 	"strconv"
 	"sync"
 	"time"
-
-	"github.com/chromedp/cdproto/network"
 )
 
 // cachedItem 结构体用于存储带有过期时间的数据。
@@ -39,29 +36,21 @@ func (ci *cachedItem[T]) isValid() bool {
 }
 
 // Provider 是 DuckDuckGo API 的核心管理器。
-// 它封装了获取和缓存 vqd-hash token 的所有逻辑，并管理对 ChromeDP 的调用。
+// 它封装了获取和缓存 vqd-hash token 的所有逻辑。
 // 这避免了使用全局变量，使代码更易于测试和维护。
 type Provider struct {
-	client                  httpclient.AuroraHttpClient
-	proxyURL                string
-	vqdToken                cachedItem[string] // 缓存 vqd-hash token
-	jsCode                  cachedItem[string] // 缓存从 header 获取的 JS 代码
-	sandboxURL              cachedItem[string] // 缓存用于执行 JS 的沙箱环境 URL
-	tokenMutex              sync.Mutex         // 用于保护 token 刷新过程的互斥锁
-	browserMutex            sync.Mutex         // Duck.ai 页面自动化串行锁
-	browserToken            cachedItem[browserTokenState]
-	chromeCancel            context.CancelFunc // 用于在程序结束时关闭 ChromeDP 上下文
-	browserCtx              context.Context
-	browserCancel           context.CancelFunc
-	browserListenerAttached bool
-	browserRefreshInFlight  bool
-	browserRequestHeadersCh chan network.Headers
-	feVersion               string
+	client     httpclient.AuroraHttpClient
+	proxyURL   string
+	vqdToken   cachedItem[string] // 缓存 vqd-hash token
+	jsCode     cachedItem[string] // 缓存从 header 获取的 JS 代码
+	tokenMutex sync.Mutex         // 用于保护 token 刷新过程的互斥锁
+	feVersion  string
 	// 从环境变量读取的缓存时间
 	tokenExpiration      time.Duration
 	scriptsCacheDuration time.Duration
-	sandboxCacheDuration time.Duration
 }
+
+var generateVQDToken = generateVQDTokenFromJS
 
 // getDurationFromEnv 是一个辅助函数，用于从环境变量中安全地读取时间（秒）。
 func getDurationFromEnv(key string, defaultValue time.Duration) time.Duration {
@@ -75,28 +64,16 @@ func getDurationFromEnv(key string, defaultValue time.Duration) time.Duration {
 }
 
 // NewProvider 创建一个新的 Provider 实例。
-// 它会初始化 ChromeDP 环境。
 func NewProvider(client httpclient.AuroraHttpClient, proxyURL string) (*Provider, error) {
-	cancel, err := initChromedp()
-	if err != nil {
-		return nil, fmt.Errorf("failed to initialize chromedp: %w", err)
-	}
-
 	provider := &Provider{
-		client:       client,
-		proxyURL:     proxyURL,
-		chromeCancel: cancel,
-		feVersion:    getStringFromEnv("FE_VERSION", "serp_20260424_180649_ET-0bdc33b2a02ebf8f235def65d887787f694720a1"),
+		client:    client,
+		proxyURL:  proxyURL,
+		feVersion: getStringFromEnv("FE_VERSION", "serp_20260424_180649_ET-0bdc33b2a02ebf8f235def65d887787f694720a1"),
 		// 初始化缓存时间
 		tokenExpiration:      getDurationFromEnv("TOKEN_EXPIRATION_SECONDS", 1*time.Second),
 		scriptsCacheDuration: getDurationFromEnv("SCRIPTS_CACHE_SECONDS", 3600*time.Second),
-		sandboxCacheDuration: getDurationFromEnv("SANDBOX_CACHE_SECONDS", 86400*time.Second),
 	}
-	if os.Getenv("DUCKAI_BROWSER_CHAT") == "0" {
-		provider.warmSession()
-	} else if os.Getenv("DUCKAI_BROWSER_PREWARM") != "0" {
-		go provider.prewarmBrowserToken()
-	}
+	provider.warmSession()
 	return provider, nil
 }
 
@@ -115,17 +92,7 @@ func (p *Provider) InvalidateCache() {
 
 	p.vqdToken = cachedItem[string]{}
 	p.jsCode = cachedItem[string]{}
-	p.sandboxURL = cachedItem[string]{}
 	logger.Warnf("All caches have been invalidated due to an API error.")
-}
-
-// Close 优雅地关闭 Provider 所持有的资源，例如 ChromeDP 连接。
-func (p *Provider) Close() {
-	logger.Infof("Closing Provider resources...")
-	if p.browserCancel != nil {
-		p.browserCancel()
-	}
-	p.chromeCancel()
 }
 
 // GetToken 获取一个有效的 vqd-hash token。
@@ -148,17 +115,10 @@ func (p *Provider) GetToken() (string, error) {
 // refreshToken 执行获取新 token 的完整流程。
 // 注意：此方法不是线程安全的，应由 GetToken 等公共方法在锁的保护下调用。
 func (p *Provider) refreshToken() (string, error) {
-	// 1. 获取执行 JS 所需的沙箱环境
-	sandboxURL, _, err := p.getSandboxURL()
-	if err != nil {
-		return "", fmt.Errorf("failed to get sandbox url: %w", err)
-	}
-	// 使用环境变量配置的缓存时间
-	p.sandboxURL = cachedItem[string]{Value: sandboxURL, ExpireAt: time.Now().Add(p.sandboxCacheDuration)}
-
-	// 2. 获取 JS
+	// 1. 获取挑战 JS
 	jsCode := p.jsCode.Value
 	if !p.jsCode.isValid() {
+		var err error
 		jsCode, err = p.getScripts(true)
 		if err != nil {
 			return "", fmt.Errorf("failed to get scripts for token generation: %w", err)
@@ -167,15 +127,23 @@ func (p *Provider) refreshToken() (string, error) {
 		p.jsCode = cachedItem[string]{Value: jsCode, ExpireAt: time.Now().Add(p.scriptsCacheDuration)}
 	}
 
-	// 3. 生成 Token
-	token, err := p.generateTokenFromJS(jsCode, sandboxURL)
+	// 2. 在内嵌 Goja 运行时中执行挑战，不依赖外部浏览器。
+	token, err := generateVQDToken(jsCode)
 	if err != nil {
-		return "", fmt.Errorf("failed to execute obfuscated js: %w", err)
+		return "", fmt.Errorf("goja VQD generation failed: %w", err)
 	}
 
 	p.cacheToken(token)
 	logger.Debugf("Successfully refreshed VQD token.")
 	return token, nil
+}
+
+func generateVQDTokenFromJS(jsCode string) (string, error) {
+	payload, err := executeVQDHashScript(jsCode)
+	if err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString([]byte(payload)), nil
 }
 
 // cacheToken 将新的 token 存入缓存，并设置过期时间。
@@ -231,10 +199,6 @@ func (p *Provider) getScripts(fresh bool) (string, error) {
 
 // PostConversation 发送聊天请求到 DuckAI API。
 func (p *Provider) PostConversation(request duckgotypes.ApiRequest) (*http.Response, error) {
-	if os.Getenv("DUCKAI_BROWSER_CHAT") != "0" {
-		return p.PostConversationViaBrowser(request)
-	}
-
 	if p.proxyURL != "" {
 		p.client.SetProxy(p.proxyURL)
 	}

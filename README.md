@@ -1,5 +1,7 @@
 # duck2api
 
+完整接口、请求示例、Anthropic/Claude Code 配置及环境变量说明见 [API.md](API.md)。
+
 # Web端 
 
 访问http://你的服务器ip:8080/web

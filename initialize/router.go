@@ -39,13 +39,25 @@ func RegisterRouter() *gin.Engine {
 
 	// registerV1ApiRoutes 封装了所有 /v1 相关的路由注册逻辑。
 	registerV1ApiRoutes := func(rg *gin.RouterGroup) {
-		rg.OPTIONS("/chat/completions", optionsHandler)
-		rg.OPTIONS("/models", optionsHandler) // 修正：与 GET /v1/models 路径保持一致
+		for _, path := range []string{"/chat/completions", "/messages", "/responses", "/images/generations", "/images/edits", "/files", "/audio/transcriptions", "/audio/speech", "/models"} {
+			rg.OPTIONS(path, optionsHandler)
+		}
 
 		// 使用中间件保护需要授权的路由
 		authGroup := rg.Group("").Use(middlewares.Authorization)
 		{
 			authGroup.POST("/chat/completions", handler.duckduckgo)
+			authGroup.POST("/messages", handler.messagesHandler)
+			authGroup.POST("/responses", handler.responses)
+			authGroup.POST("/images/generations", handler.imageGenerations)
+			authGroup.POST("/images/edits", handler.imageEdits)
+			authGroup.POST("/files", handler.filesUpload)
+			authGroup.GET("/files", handler.filesList)
+			authGroup.GET("/files/:file_id", handler.filesGet)
+			authGroup.DELETE("/files/:file_id", handler.filesDelete)
+			authGroup.GET("/files/:file_id/content", handler.filesContent)
+			authGroup.POST("/audio/transcriptions", handler.audioTranscriptions)
+			authGroup.POST("/audio/speech", handler.audioSpeech)
 			authGroup.GET("/models", handler.engines)
 		}
 	}

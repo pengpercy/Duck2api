@@ -277,6 +277,51 @@ func (p *Provider) PostConversation(request duckgotypes.ApiRequest) (*http.Respo
 	return nil, lastErr
 }
 
+// AuthenticatedRequest reuses this Provider's VQD acquisition, cache and
+// invalidation path for non-chat Duck.ai endpoints.
+func (p *Provider) AuthenticatedRequest(method, url, contentType, accept string, body []byte) (*http.Response, error) {
+	if p.proxyURL != "" {
+		p.client.SetProxy(p.proxyURL)
+	}
+	var lastErr error
+	for attempt := 0; attempt < 4; attempt++ {
+		token, err := p.GetToken()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get VQD token: %w", err)
+		}
+		header := createHeader()
+		if contentType != "" {
+			header.Set("content-type", contentType)
+		}
+		if accept != "" {
+			header.Set("accept", accept)
+		}
+		header.Set("x-vqd-hash-1", token)
+		header.Set("x-fe-signals", makeFESignals())
+		header.Set("x-fe-version", p.feVersion)
+		header.Set("x-ddg-journey-id", fmt.Sprintf("%x", rand.Uint64()))
+		var reader io.Reader
+		if body != nil {
+			reader = bytes.NewReader(body)
+		}
+		resp, err := p.client.Request(httpclient.HttpMethod(method), url, header, sessionCookies(), reader)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		p.updateScriptsFromHeader(resp.Header)
+		if resp.StatusCode != http.StatusTeapot && resp.StatusCode != http.StatusTooManyRequests {
+			return resp, nil
+		}
+		challengeBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		lastErr = fmt.Errorf("Duck.ai rejected request (%d): %s", resp.StatusCode, string(challengeBody))
+		p.InvalidateCache()
+		time.Sleep(time.Duration(300+attempt*400+rand.Intn(250)) * time.Millisecond)
+	}
+	return nil, lastErr
+}
+
 // updateScriptsFromHeader 从响应头中提取并更新缓存的 JS 代码。
 func (p *Provider) updateScriptsFromHeader(header http.Header) {
 	base64EncodedJs := header.Get("x-vqd-hash-1")
@@ -313,7 +358,7 @@ func (p *Provider) warmSession() {
 		io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
 	}
-	if resp, err := p.client.Request(httpclient.GET, "https://duckduckgo.com/?q=DuckDuckGo+AI+Chat&ia=chat&duckai=1", header, sessionCookies(), nil); err == nil && resp != nil {
+	if resp, err := p.client.Request(httpclient.GET, "https://duck.ai/chat?ia=chat&duckai=1", header, sessionCookies(), nil); err == nil && resp != nil {
 		io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
 	}

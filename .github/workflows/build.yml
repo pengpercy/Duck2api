@@ -34,6 +34,10 @@ jobs:
             goarch: amd64
             archive_name: duck2api-darwin-amd64.tar.gz
             binary_name: duck2api
+          - goos: darwin
+            goarch: arm64
+            archive_name: duck2api-darwin-arm64.tar.gz
+            binary_name: duck2api
           - goos: freebsd
             goarch: amd64
             archive_name: duck2api-freebsd-amd64.tar.gz

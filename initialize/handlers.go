@@ -2,6 +2,7 @@ package initialize
 
 import (
 	duckgoConvert "aurora/conversion/requests/duckgo"
+	"aurora/httpclient"
 	"aurora/httpclient/bogdanfinn"
 	"aurora/internal/duckgo"
 	"aurora/internal/proxys"
@@ -27,12 +28,11 @@ func NewHandler(proxy *proxys.IProxy) (*Handler, error) {
 	// 1. 获取代理地址
 	proxyUrl := proxy.GetProxyIP()
 
-	// 2. 创建一个长生命周期的 HTTP 客户端
-	client := bogdanfinn.NewStdClient()
-
-	// 3. 初始化 duckgo.Provider
-	// Provider 将管理客户端、代理和 Token 的所有状态
-	provider, err := duckgo.NewProvider(client, proxyUrl)
+	// 2. 初始化 duckgo.Provider
+	// Provider 将管理客户端、代理和 Token 的所有状态；
+	// 传入客户端工厂，以便在遇到 418/429 风控时重建会话
+	newClient := func() httpclient.AuroraHttpClient { return bogdanfinn.NewStdClient() }
+	provider, err := duckgo.NewProvider(newClient, proxyUrl)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create duckgo provider: %w", err)
 	}

@@ -39,16 +39,25 @@ func (ci *cachedItem[T]) isValid() bool {
 // 它封装了获取和缓存 vqd-hash token 的所有逻辑。
 // 这避免了使用全局变量，使代码更易于测试和维护。
 type Provider struct {
-	client     httpclient.AuroraHttpClient
-	proxyURL   string
-	vqdToken   cachedItem[string] // 缓存 vqd-hash token
-	jsCode     cachedItem[string] // 缓存从 header 获取的 JS 代码
-	tokenMutex sync.Mutex         // 用于保护 token 刷新过程的互斥锁
-	feVersion  string
+	client      httpclient.AuroraHttpClient
+	newClient   func() httpclient.AuroraHttpClient // 用于在会话被风控时重建客户端
+	clientGen   uint64                             // 客户端代际，每次重建 +1
+	lastReset   time.Time
+	clientMutex sync.Mutex // 保护 client/clientGen/lastReset
+	proxyURL    string
+	vqdToken    cachedItem[string] // 缓存 vqd-hash token
+	jsCode      cachedItem[string] // 缓存从 header 获取的 JS 代码
+	tokenMutex  sync.Mutex         // 用于保护 token 刷新过程的互斥锁
+	feVersion   string
 	// 从环境变量读取的缓存时间
 	tokenExpiration      time.Duration
 	scriptsCacheDuration time.Duration
+	// 418/429 自动重试配置
+	maxAttempts       int
+	sessionResetAfter int
 }
+
+const sessionResetCooldown = 5 * time.Second
 
 var generateVQDToken = generateVQDTokenFromJS
 
@@ -64,17 +73,32 @@ func getDurationFromEnv(key string, defaultValue time.Duration) time.Duration {
 }
 
 // NewProvider 创建一个新的 Provider 实例。
-func NewProvider(client httpclient.AuroraHttpClient, proxyURL string) (*Provider, error) {
+// newClient 用于创建 HTTP 客户端，在会话被风控时会被再次调用以重建客户端。
+func NewProvider(newClient func() httpclient.AuroraHttpClient, proxyURL string) (*Provider, error) {
+	client := newClient()
+	if proxyURL != "" {
+		client.SetProxy(proxyURL)
+	}
 	provider := &Provider{
 		client:    client,
+		newClient: newClient,
 		proxyURL:  proxyURL,
 		feVersion: getStringFromEnv("FE_VERSION", "serp_20260424_180649_ET-0bdc33b2a02ebf8f235def65d887787f694720a1"),
 		// 初始化缓存时间
 		tokenExpiration:      getDurationFromEnv("TOKEN_EXPIRATION_SECONDS", 1*time.Second),
 		scriptsCacheDuration: getDurationFromEnv("SCRIPTS_CACHE_SECONDS", 3600*time.Second),
+		maxAttempts:          getIntFromEnv("UPSTREAM_MAX_RETRIES", 6) + 1,
+		sessionResetAfter:    getIntFromEnv("SESSION_RESET_AFTER_FAILURES", 2),
 	}
 	provider.warmSession()
 	return provider, nil
+}
+
+func getIntFromEnv(key string, defaultValue int) int {
+	if val, err := strconv.Atoi(os.Getenv(key)); err == nil && val >= 0 {
+		return val
+	}
+	return defaultValue
 }
 
 func getStringFromEnv(key, defaultValue string) string {
@@ -171,7 +195,8 @@ func (p *Provider) getScripts(fresh bool) (string, error) {
 	}
 
 	logger.Infof("Get scripts from /duckchat/v1/status")
-	response, err := p.client.Request(httpclient.GET, "https://duck.ai/duckchat/v1/status", header, nil, nil)
+	client, _ := p.currentClient()
+	response, err := client.Request(httpclient.GET, "https://duck.ai/duckchat/v1/status", header, nil, nil)
 	if err != nil {
 		return "", err
 	}
@@ -199,91 +224,163 @@ func (p *Provider) getScripts(fresh bool) (string, error) {
 
 // PostConversation 发送聊天请求到 DuckAI API。
 func (p *Provider) PostConversation(request duckgotypes.ApiRequest) (*http.Response, error) {
-	if p.proxyURL != "" {
-		p.client.SetProxy(p.proxyURL)
-	}
-
 	bodyJSON, err := json.Marshal(request)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request body: %w", err)
 	}
-
-	var lastErr error
-	for attempt := 0; attempt < 4; attempt++ {
-		token, err := p.GetToken()
-		if err != nil {
-			return nil, fmt.Errorf("failed to get a valid token for chat: %w", err)
-		}
-
-		header := createHeader()
+	return p.doWithRetry(httpclient.POST, "https://duck.ai/duckchat/v1/chat", bodyJSON, func(header httpclient.AuroraHeaders) {
 		header.Set("accept", "text/event-stream")
-		header.Set("x-vqd-hash-1", token)
-		header.Set("x-fe-signals", makeFESignals())
-		header.Set("x-fe-version", p.feVersion)
-
-		response, err := p.client.Request(httpclient.POST, "https://duck.ai/duckchat/v1/chat", header, sessionCookies(), bytes.NewBuffer(bodyJSON))
-		if err != nil {
-			lastErr = err
-			continue
-		}
-
-		p.updateScriptsFromHeader(response.Header)
-		if response.StatusCode != http.StatusTeapot {
-			return response, nil
-		}
-
-		body, _ := io.ReadAll(response.Body)
-		response.Body.Close()
-		lastErr = fmt.Errorf("duck.ai challenge rejected request: %s", string(body))
-		p.InvalidateCache()
-		time.Sleep(time.Duration(300+attempt*400+rand.Intn(250)) * time.Millisecond)
-	}
-	return nil, lastErr
+	})
 }
 
 // AuthenticatedRequest reuses this Provider's VQD acquisition, cache and
 // invalidation path for non-chat Duck.ai endpoints.
 func (p *Provider) AuthenticatedRequest(method, url, contentType, accept string, body []byte) (*http.Response, error) {
-	if p.proxyURL != "" {
-		p.client.SetProxy(p.proxyURL)
-	}
-	var lastErr error
-	for attempt := 0; attempt < 4; attempt++ {
-		token, err := p.GetToken()
-		if err != nil {
-			return nil, fmt.Errorf("failed to get VQD token: %w", err)
-		}
-		header := createHeader()
+	return p.doWithRetry(httpclient.HttpMethod(method), url, body, func(header httpclient.AuroraHeaders) {
 		if contentType != "" {
 			header.Set("content-type", contentType)
 		}
 		if accept != "" {
 			header.Set("accept", accept)
 		}
+		header.Set("x-ddg-journey-id", fmt.Sprintf("%x", rand.Uint64()))
+	})
+}
+
+// isRetryableStatus 判断上游状态码是否为可通过重试恢复的风控/限流错误。
+func isRetryableStatus(code int) bool {
+	return code == http.StatusTeapot || code == http.StatusTooManyRequests
+}
+
+// doWithRetry 发送带 VQD 的请求，遇到 418/429 或网络错误时自动重试，对调用方透明。
+// 连续失败达到 sessionResetAfter 次后会重建 HTTP 客户端并重新预热会话，
+// 效果等同于重启容器（清空 cookie、连接池并更换 TLS 指纹）。
+// 最后一次仍失败时，原样返回上游响应，交给调用方的错误处理。
+func (p *Provider) doWithRetry(method httpclient.HttpMethod, url string, body []byte, decorate func(httpclient.AuroraHeaders)) (*http.Response, error) {
+	var lastErr error
+	failures := 0
+	for attempt := 0; attempt < p.maxAttempts; attempt++ {
+		if failures > 0 && p.sessionResetAfter > 0 && failures%p.sessionResetAfter == 0 {
+			p.resetSession()
+		}
+
+		token, err := p.GetToken()
+		if err != nil {
+			lastErr = fmt.Errorf("failed to get VQD token: %w", err)
+			failures++
+			p.InvalidateCache()
+			time.Sleep(retryDelay(attempt, 0))
+			continue
+		}
+
+		header := createHeader()
+		decorate(header)
 		header.Set("x-vqd-hash-1", token)
 		header.Set("x-fe-signals", makeFESignals())
 		header.Set("x-fe-version", p.feVersion)
-		header.Set("x-ddg-journey-id", fmt.Sprintf("%x", rand.Uint64()))
+
 		var reader io.Reader
 		if body != nil {
 			reader = bytes.NewReader(body)
 		}
-		resp, err := p.client.Request(httpclient.HttpMethod(method), url, header, sessionCookies(), reader)
+		client, gen := p.currentClient()
+		resp, err := client.Request(method, url, header, sessionCookies(), reader)
 		if err != nil {
 			lastErr = err
+			failures++
+			p.markClientBroken(gen)
+			time.Sleep(retryDelay(attempt, 0))
 			continue
 		}
+
 		p.updateScriptsFromHeader(resp.Header)
-		if resp.StatusCode != http.StatusTeapot && resp.StatusCode != http.StatusTooManyRequests {
+		if !isRetryableStatus(resp.StatusCode) {
 			return resp, nil
 		}
+		if attempt == p.maxAttempts-1 {
+			return resp, nil
+		}
+
 		challengeBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		logger.Warnf("Duck.ai rejected request (%d), retrying (%d/%d): %s", resp.StatusCode, attempt+1, p.maxAttempts-1, string(challengeBody))
 		lastErr = fmt.Errorf("Duck.ai rejected request (%d): %s", resp.StatusCode, string(challengeBody))
+		failures++
 		p.InvalidateCache()
-		time.Sleep(time.Duration(300+attempt*400+rand.Intn(250)) * time.Millisecond)
+		time.Sleep(retryDelay(attempt, parseRetryAfter(resp.Header.Get("Retry-After"))))
 	}
 	return nil, lastErr
+}
+
+// retryDelay 计算指数退避+抖动的等待时间，上游给出 Retry-After 时优先使用（上限 10s）。
+func retryDelay(attempt int, retryAfter time.Duration) time.Duration {
+	if retryAfter > 0 {
+		if retryAfter > 10*time.Second {
+			retryAfter = 10 * time.Second
+		}
+		return retryAfter
+	}
+	delay := time.Duration(300*(1<<attempt)) * time.Millisecond
+	if delay > 5*time.Second {
+		delay = 5 * time.Second
+	}
+	return delay + time.Duration(rand.Intn(300))*time.Millisecond
+}
+
+func parseRetryAfter(value string) time.Duration {
+	if value == "" {
+		return 0
+	}
+	if secs, err := strconv.Atoi(value); err == nil && secs > 0 {
+		return time.Duration(secs) * time.Second
+	}
+	if t, err := http.ParseTime(value); err == nil {
+		return time.Until(t)
+	}
+	return 0
+}
+
+// currentClient 返回当前 HTTP 客户端及其代际编号。
+func (p *Provider) currentClient() (httpclient.AuroraHttpClient, uint64) {
+	p.clientMutex.Lock()
+	defer p.clientMutex.Unlock()
+	return p.client, p.clientGen
+}
+
+// markClientBroken 在网络错误时重建客户端；仅当 gen 仍为当前代际时才重建，避免并发请求重复重建。
+func (p *Provider) markClientBroken(gen uint64) {
+	p.clientMutex.Lock()
+	stale := gen != p.clientGen
+	p.clientMutex.Unlock()
+	if !stale {
+		p.resetSession()
+	}
+}
+
+// resetSession 重建 HTTP 客户端、清空缓存并重新预热会话，相当于进程内“重启”。
+// 在 sessionResetCooldown 内只执行一次，避免并发请求同时触发重建。
+func (p *Provider) resetSession() {
+	if p.newClient == nil {
+		p.InvalidateCache()
+		return
+	}
+	p.clientMutex.Lock()
+	if time.Since(p.lastReset) < sessionResetCooldown {
+		p.clientMutex.Unlock()
+		return
+	}
+	client := p.newClient()
+	if p.proxyURL != "" {
+		client.SetProxy(p.proxyURL)
+	}
+	p.client = client
+	p.clientGen++
+	p.lastReset = time.Now()
+	p.clientMutex.Unlock()
+
+	p.InvalidateCache()
+	logger.Warnf("Duck.ai session reset: rebuilt HTTP client and re-warming session.")
+	p.warmSession()
 }
 
 // updateScriptsFromHeader 从响应头中提取并更新缓存的 JS 代码。
@@ -318,11 +415,12 @@ func (p *Provider) warmSession() {
 	header.Set("sec-fetch-user", "?1")
 	header.Set("upgrade-insecure-requests", "1")
 
-	if resp, err := p.client.Request(httpclient.GET, "https://duck.ai/", header, sessionCookies(), nil); err == nil && resp != nil {
+	client, _ := p.currentClient()
+	if resp, err := client.Request(httpclient.GET, "https://duck.ai/", header, sessionCookies(), nil); err == nil && resp != nil {
 		io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
 	}
-	if resp, err := p.client.Request(httpclient.GET, "https://duck.ai/chat?ia=chat&duckai=1", header, sessionCookies(), nil); err == nil && resp != nil {
+	if resp, err := client.Request(httpclient.GET, "https://duck.ai/chat?ia=chat&duckai=1", header, sessionCookies(), nil); err == nil && resp != nil {
 		io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
 	}

@@ -112,6 +112,8 @@ FE_VERSION=... # 可覆盖默认 x-fe-version
 ```bash
 TOKEN_EXPIRATION_SECONDS=1 # challenge/token 本地缓存秒数
 SCRIPTS_CACHE_SECONDS=3600 # challenge JS 缓存秒数
+UPSTREAM_MAX_RETRIES=6 # 上游返回 418/429 时的自动重试次数
+SESSION_RESET_AFTER_FAILURES=2 # 连续失败多少次后重建 HTTP 会话（等同重启容器），0 为关闭
 ```
 
 ## 鸣谢

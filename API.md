@@ -304,7 +304,8 @@ curl http://localhost:8080/ping
 | `TOKEN_EXPIRATION_SECONDS` | `1` | VQD token 缓存 |
 | `SCRIPTS_CACHE_SECONDS` | `3600` | challenge JS 缓存 |
 | `UPSTREAM_MAX_RETRIES` | `6` | 上游 418/429 自动重试次数 |
-| `SESSION_RESET_AFTER_FAILURES` | `2` | 连续失败 N 次后重建 HTTP 会话（0 关闭） |
+| `SESSION_RESET_AFTER_FAILURES` | `1` | 连续失败 N 次后重建 HTTP 会话（0 关闭） |
+| `IDLE_SESSION_RESET_SECONDS` | `300` | 空闲超过 N 秒后，下次请求前先重建会话（0 关闭） |
 | `CLAUDE_CODE_EFFORT_LEVEL` | 空 | Anthropic 未提供 `thinking` 时的默认推理档位 |
 
 代理优先级为：`PROXY_URL`、项目目录中的 `proxies.txt`（逐行轮询）、`http_proxy`。

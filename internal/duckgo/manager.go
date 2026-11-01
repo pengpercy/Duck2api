@@ -55,11 +55,17 @@ type Provider struct {
 	// 418/429 自动重试配置
 	maxAttempts       int
 	sessionResetAfter int
+	// 空闲超过 idleResetAfter 后，下一次请求前先重建会话（0 关闭）
+	idleResetAfter time.Duration
+	lastSuccess    time.Time // 最近一次上游成功响应时间，受 clientMutex 保护
 }
 
 const sessionResetCooldown = 5 * time.Second
 
 var generateVQDToken = generateVQDTokenFromJS
+
+// sleep 可在测试中替换，避免真实等待退避时间
+var sleep = time.Sleep
 
 // getDurationFromEnv 是一个辅助函数，用于从环境变量中安全地读取时间（秒）。
 func getDurationFromEnv(key string, defaultValue time.Duration) time.Duration {
@@ -88,9 +94,11 @@ func NewProvider(newClient func() httpclient.AuroraHttpClient, proxyURL string) 
 		tokenExpiration:      getDurationFromEnv("TOKEN_EXPIRATION_SECONDS", 1*time.Second),
 		scriptsCacheDuration: getDurationFromEnv("SCRIPTS_CACHE_SECONDS", 3600*time.Second),
 		maxAttempts:          getIntFromEnv("UPSTREAM_MAX_RETRIES", 6) + 1,
-		sessionResetAfter:    getIntFromEnv("SESSION_RESET_AFTER_FAILURES", 2),
+		sessionResetAfter:    getIntFromEnv("SESSION_RESET_AFTER_FAILURES", 1),
+		idleResetAfter:       time.Duration(getIntFromEnv("IDLE_SESSION_RESET_SECONDS", 300)) * time.Second,
 	}
 	provider.warmSession()
+	provider.lastSuccess = time.Now()
 	return provider, nil
 }
 
@@ -111,12 +119,16 @@ func getStringFromEnv(key, defaultValue string) string {
 // InvalidateCache 在 API 返回错误时清空所有缓存。
 // 这是线程安全的。
 func (p *Provider) InvalidateCache() {
+	p.clearCache()
+	logger.Warnf("All caches have been invalidated due to an API error.")
+}
+
+func (p *Provider) clearCache() {
 	p.tokenMutex.Lock()
 	defer p.tokenMutex.Unlock()
 
 	p.vqdToken = cachedItem[string]{}
 	p.jsCode = cachedItem[string]{}
-	logger.Warnf("All caches have been invalidated due to an API error.")
 }
 
 // GetToken 获取一个有效的 vqd-hash token。
@@ -259,6 +271,7 @@ func isRetryableStatus(code int) bool {
 func (p *Provider) doWithRetry(method httpclient.HttpMethod, url string, body []byte, decorate func(httpclient.AuroraHeaders)) (*http.Response, error) {
 	var lastErr error
 	failures := 0
+	p.resetIfIdle()
 	for attempt := 0; attempt < p.maxAttempts; attempt++ {
 		if failures > 0 && p.sessionResetAfter > 0 && failures%p.sessionResetAfter == 0 {
 			p.resetSession()
@@ -268,8 +281,8 @@ func (p *Provider) doWithRetry(method httpclient.HttpMethod, url string, body []
 		if err != nil {
 			lastErr = fmt.Errorf("failed to get VQD token: %w", err)
 			failures++
-			p.InvalidateCache()
-			time.Sleep(retryDelay(attempt, 0))
+			p.clearCache()
+			sleep(retryDelay(attempt, 0))
 			continue
 		}
 
@@ -289,12 +302,15 @@ func (p *Provider) doWithRetry(method httpclient.HttpMethod, url string, body []
 			lastErr = err
 			failures++
 			p.markClientBroken(gen)
-			time.Sleep(retryDelay(attempt, 0))
+			sleep(retryDelay(attempt, 0))
 			continue
 		}
 
 		p.updateScriptsFromHeader(resp.Header)
 		if !isRetryableStatus(resp.StatusCode) {
+			if resp.StatusCode < 400 {
+				p.markSuccess()
+			}
 			return resp, nil
 		}
 		if attempt == p.maxAttempts-1 {
@@ -306,8 +322,8 @@ func (p *Provider) doWithRetry(method httpclient.HttpMethod, url string, body []
 		logger.Warnf("Duck.ai rejected request (%d), retrying (%d/%d): %s", resp.StatusCode, attempt+1, p.maxAttempts-1, string(challengeBody))
 		lastErr = fmt.Errorf("Duck.ai rejected request (%d): %s", resp.StatusCode, string(challengeBody))
 		failures++
-		p.InvalidateCache()
-		time.Sleep(retryDelay(attempt, parseRetryAfter(resp.Header.Get("Retry-After"))))
+		p.clearCache()
+		sleep(retryDelay(attempt, parseRetryAfter(resp.Header.Get("Retry-After"))))
 	}
 	return nil, lastErr
 }
@@ -320,11 +336,12 @@ func retryDelay(attempt int, retryAfter time.Duration) time.Duration {
 		}
 		return retryAfter
 	}
-	delay := time.Duration(300*(1<<attempt)) * time.Millisecond
-	if delay > 5*time.Second {
-		delay = 5 * time.Second
+	// 1s, 2s, 4s, 6s...：过快的连续重试会被识别为机器人行为，几百毫秒内重发基本必然再次 418
+	delay := time.Duration(1000*(1<<attempt)) * time.Millisecond
+	if delay > 6*time.Second {
+		delay = 6 * time.Second
 	}
-	return delay + time.Duration(rand.Intn(300))*time.Millisecond
+	return delay + time.Duration(rand.Intn(500))*time.Millisecond
 }
 
 func parseRetryAfter(value string) time.Duration {
@@ -338,6 +355,32 @@ func parseRetryAfter(value string) time.Duration {
 		return time.Until(t)
 	}
 	return 0
+}
+
+func (p *Provider) markSuccess() {
+	p.clientMutex.Lock()
+	p.lastSuccess = time.Now()
+	p.clientMutex.Unlock()
+}
+
+// resetIfIdle 在会话空闲过久时提前重建会话。
+// 日志显示空闲十几分钟后的首个请求几乎必然 418，而重建并预热会话后即可恢复，
+// 因此在请求前主动重建，避免先吃一轮 418 再重试。
+func (p *Provider) resetIfIdle() {
+	if p.idleResetAfter <= 0 || p.newClient == nil {
+		return
+	}
+	p.clientMutex.Lock()
+	idle := !p.lastSuccess.IsZero() && time.Since(p.lastSuccess) > p.idleResetAfter
+	if idle {
+		// 先占位，避免并发请求重复触发
+		p.lastSuccess = time.Now()
+	}
+	p.clientMutex.Unlock()
+	if idle {
+		logger.Infof("Duck.ai session idle for over %s, rebuilding session before request.", p.idleResetAfter)
+		p.resetSession()
+	}
 }
 
 // currentClient 返回当前 HTTP 客户端及其代际编号。
@@ -361,7 +404,7 @@ func (p *Provider) markClientBroken(gen uint64) {
 // 在 sessionResetCooldown 内只执行一次，避免并发请求同时触发重建。
 func (p *Provider) resetSession() {
 	if p.newClient == nil {
-		p.InvalidateCache()
+		p.clearCache()
 		return
 	}
 	p.clientMutex.Lock()
@@ -378,7 +421,7 @@ func (p *Provider) resetSession() {
 	p.lastReset = time.Now()
 	p.clientMutex.Unlock()
 
-	p.InvalidateCache()
+	p.clearCache()
 	logger.Warnf("Duck.ai session reset: rebuilt HTTP client and re-warming session.")
 	p.warmSession()
 }

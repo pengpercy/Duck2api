@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // fakeClient 对 status 接口返回挑战，对 chat 接口依次返回 statuses 中的状态码。
@@ -40,6 +41,9 @@ func newTestProvider(t *testing.T, statuses []int, maxAttempts int) (*Provider, 
 	originalGenerate := generateVQDToken
 	t.Cleanup(func() { generateVQDToken = originalGenerate })
 	generateVQDToken = func(string) (string, error) { return "token", nil }
+	originalSleep := sleep
+	t.Cleanup(func() { sleep = originalSleep })
+	sleep = func(time.Duration) {}
 
 	var chatCalls, created int32
 	newClient := func() httpclient.AuroraHttpClient {
@@ -86,5 +90,26 @@ func TestPostConversationReturnsLastUpstreamResponse(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(chatCalls); got != 3 {
 		t.Fatalf("chat calls = %d, want 3", got)
+	}
+}
+
+func TestIdleSessionIsRebuiltBeforeRequest(t *testing.T) {
+	p, _, created := newTestProvider(t, []int{http.StatusOK, http.StatusOK}, 3)
+	p.idleResetAfter = time.Minute
+	p.lastSuccess = time.Now().Add(-2 * time.Minute)
+
+	if _, err := p.PostConversation(duckgotypes.ApiRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := atomic.LoadInt32(created); got != 2 {
+		t.Fatalf("clients created = %d, want 2 (idle rebuild)", got)
+	}
+
+	// 刚成功过，不应再次重建
+	if _, err := p.PostConversation(duckgotypes.ApiRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := atomic.LoadInt32(created); got != 2 {
+		t.Fatalf("clients created = %d, want 2 (no rebuild when active)", got)
 	}
 }

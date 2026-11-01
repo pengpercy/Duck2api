@@ -91,11 +91,12 @@ func NewProvider(newClient func() httpclient.AuroraHttpClient, proxyURL string) 
 		proxyURL:  proxyURL,
 		feVersion: getStringFromEnv("FE_VERSION", "serp_20260424_180649_ET-0bdc33b2a02ebf8f235def65d887787f694720a1"),
 		// 初始化缓存时间
-		tokenExpiration:      getDurationFromEnv("TOKEN_EXPIRATION_SECONDS", 1*time.Second),
-		scriptsCacheDuration: getDurationFromEnv("SCRIPTS_CACHE_SECONDS", 3600*time.Second),
+		tokenExpiration: getDurationFromEnv("TOKEN_EXPIRATION_SECONDS", 1*time.Second),
+		// 默认不缓存挑战 JS：每个新请求都从 /status 取新挑战，复用旧挑战容易触发 418
+		scriptsCacheDuration: getDurationFromEnv("SCRIPTS_CACHE_SECONDS", 0),
 		maxAttempts:          getIntFromEnv("UPSTREAM_MAX_RETRIES", 6) + 1,
 		sessionResetAfter:    getIntFromEnv("SESSION_RESET_AFTER_FAILURES", 1),
-		idleResetAfter:       time.Duration(getIntFromEnv("IDLE_SESSION_RESET_SECONDS", 300)) * time.Second,
+		idleResetAfter:       time.Duration(getIntFromEnv("IDLE_SESSION_RESET_SECONDS", 120)) * time.Second,
 	}
 	provider.warmSession()
 	provider.lastSuccess = time.Now()
@@ -199,6 +200,7 @@ func (p *Provider) getScripts(fresh bool) (string, error) {
 	}
 
 	header := createHeader()
+	delete(header, "content-type")
 	header.Set("accept", "*/*")
 	header.Set("cache-control", "no-store")
 	header.Set("pragma", "no-cache")
@@ -450,8 +452,12 @@ func (p *Provider) updateScriptsFromHeader(header http.Header) {
 }
 
 func (p *Provider) warmSession() {
+	// 顶层导航请求：浏览器不会带 content-type / origin / referer
 	header := createHeader()
-	header.Set("accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	delete(header, "content-type")
+	delete(header, "origin")
+	delete(header, "referer")
+	header.Set("accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8")
 	header.Set("sec-fetch-dest", "document")
 	header.Set("sec-fetch-mode", "navigate")
 	header.Set("sec-fetch-site", "none")

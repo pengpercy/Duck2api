@@ -24,6 +24,9 @@ func createHeader() httpclient.AuroraHeaders {
 	header.Set("origin", "https://duck.ai")
 	header.Set("referer", "https://duck.ai/")
 	header.Set("user-agent", ua)
+	header.Set("sec-fetch-dest", "empty")
+	header.Set("sec-fetch-mode", "cors")
+	header.Set("sec-fetch-site", "same-origin")
 	if major := chromeMajorVersion(ua); major != "" {
 		header.Set("sec-ch-ua", `"Chromium";v="`+major+`", "Google Chrome";v="`+major+`", "Not.A/Brand";v="99"`)
 		header.Set("sec-ch-ua-mobile", "?0")

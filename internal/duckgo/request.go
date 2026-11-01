@@ -13,18 +13,36 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-var (
-	UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36"
-)
-
+// createHeader 构造与 VQD 挑战中模拟的浏览器一致的请求头：
+// user-agent / sec-ch-ua / accept-language 必须与挑战 JS 看到的 navigator
+// (vqdUserAgent()、platform=Win32、languages=en-US) 对得上，否则上游风控更容易返回 418。
 func createHeader() httpclient.AuroraHeaders {
+	ua := vqdUserAgent()
 	header := make(httpclient.AuroraHeaders)
-	header.Set("accept-language", "zh-CN,zh;q=0.9")
+	header.Set("accept-language", "en-US,en;q=0.9")
 	header.Set("content-type", "application/json")
 	header.Set("origin", "https://duck.ai")
 	header.Set("referer", "https://duck.ai/")
-	header.Set("user-agent", UA)
+	header.Set("user-agent", ua)
+	if major := chromeMajorVersion(ua); major != "" {
+		header.Set("sec-ch-ua", `"Chromium";v="`+major+`", "Google Chrome";v="`+major+`", "Not.A/Brand";v="99"`)
+		header.Set("sec-ch-ua-mobile", "?0")
+		header.Set("sec-ch-ua-platform", `"Windows"`)
+	}
 	return header
+}
+
+// chromeMajorVersion 从 UA 中提取 Chrome 主版本号，非 Chrome UA 返回空串。
+func chromeMajorVersion(ua string) string {
+	i := strings.Index(ua, "Chrome/")
+	if i < 0 {
+		return ""
+	}
+	v := ua[i+len("Chrome/"):]
+	if j := strings.IndexByte(v, '.'); j > 0 {
+		return v[:j]
+	}
+	return ""
 }
 
 func HandleRequestError(c *gin.Context, response *http.Response, provider *Provider) bool {

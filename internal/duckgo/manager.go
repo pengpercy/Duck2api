@@ -14,7 +14,9 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -43,11 +45,15 @@ type Provider struct {
 	newClient   func() httpclient.AuroraHttpClient // 用于在会话被风控时重建客户端
 	clientGen   uint64                             // 客户端代际，每次重建 +1
 	lastReset   time.Time
+	sessionAt   time.Time  // 当前客户端创建时间，受 clientMutex 保护
+	sessionReqs int        // 当前客户端上发出的上游 API 请求数，受 clientMutex 保护
 	clientMutex sync.Mutex // 保护 client/clientGen/lastReset
 	proxyURL    string
 	vqdToken    cachedItem[string] // 缓存 vqd-hash token
 	jsCode      cachedItem[string] // 缓存从 header 获取的 JS 代码
 	tokenMutex  sync.Mutex         // 用于保护 token 刷新过程的互斥锁
+	tokenAt     time.Time          // 当前 token 生成时间，受 tokenMutex 保护
+	tokenUses   int                // 当前 token 已被使用次数，受 tokenMutex 保护
 	feVersion   string
 	// 从环境变量读取的缓存时间
 	tokenExpiration      time.Duration
@@ -58,6 +64,9 @@ type Provider struct {
 	// 空闲超过 idleResetAfter 后，下一次请求前先重建会话（0 关闭）
 	idleResetAfter time.Duration
 	lastSuccess    time.Time // 最近一次上游成功响应时间，受 clientMutex 保护
+	// 诊断用计数器
+	reqSeq   uint64 // 请求序号，用于串联同一请求的多行日志
+	inflight int64  // 正在进行（含仍在读取响应流）的上游请求数
 }
 
 const sessionResetCooldown = 5 * time.Second
@@ -87,6 +96,7 @@ func NewProvider(newClient func() httpclient.AuroraHttpClient, proxyURL string) 
 	}
 	provider := &Provider{
 		client:    client,
+		sessionAt: time.Now(),
 		newClient: newClient,
 		proxyURL:  proxyURL,
 		feVersion: getStringFromEnv("FE_VERSION", "serp_20260424_180649_ET-0bdc33b2a02ebf8f235def65d887787f694720a1"),
@@ -95,10 +105,12 @@ func NewProvider(newClient func() httpclient.AuroraHttpClient, proxyURL string) 
 		// 默认不缓存挑战 JS：每个新请求都从 /status 取新挑战，复用旧挑战容易触发 418
 		scriptsCacheDuration: getDurationFromEnv("SCRIPTS_CACHE_SECONDS", 0),
 		maxAttempts:          getIntFromEnv("UPSTREAM_MAX_RETRIES", 6) + 1,
-		sessionResetAfter:    getIntFromEnv("SESSION_RESET_AFTER_FAILURES", 1),
-		idleResetAfter:       time.Duration(getIntFromEnv("IDLE_SESSION_RESET_SECONDS", 120)) * time.Second,
+		// 418 的风控状态绑定在服务端（重建会话后返回体里的 p 不变），重建会话基本无效，
+		// 同一会话稍等重试反而更容易通过，因此默认连续失败 4 次才重建。
+		sessionResetAfter: getIntFromEnv("SESSION_RESET_AFTER_FAILURES", 4),
+		idleResetAfter:    time.Duration(getIntFromEnv("IDLE_SESSION_RESET_SECONDS", 120)) * time.Second,
 	}
-	provider.warmSession()
+	provider.warmSession("startup")
 	provider.lastSuccess = time.Now()
 	return provider, nil
 }
@@ -130,23 +142,50 @@ func (p *Provider) clearCache() {
 
 	p.vqdToken = cachedItem[string]{}
 	p.jsCode = cachedItem[string]{}
+	p.tokenUses = 0
+}
+
+// tokenInfo 描述一次取 token 的结果，用于诊断日志。
+type tokenInfo struct {
+	value string
+	fresh bool          // 本次新生成
+	age   time.Duration // 距 token 生成的时间
+	uses  int           // 含本次在内的使用次数
+}
+
+func (t tokenInfo) String() string {
+	src := "cached"
+	if t.fresh {
+		src = "fresh"
+	}
+	return fmt.Sprintf("token=%s token_age=%s token_uses=%d", src, fmtDur(t.age), t.uses)
 }
 
 // GetToken 获取一个有效的 vqd-hash token。
 // 如果缓存的 token 无效或已过期，它会自动执行刷新流程。
 // 这个方法是线程安全的。
 func (p *Provider) GetToken() (string, error) {
+	info, err := p.acquireToken()
+	return info.value, err
+}
+
+func (p *Provider) acquireToken() (tokenInfo, error) {
 	p.tokenMutex.Lock()
 	defer p.tokenMutex.Unlock()
 
 	if p.vqdToken.isValid() {
-		// p.getScripts(false)
-		return p.vqdToken.Value, nil
+		p.tokenUses++
+		return tokenInfo{value: p.vqdToken.Value, age: time.Since(p.tokenAt), uses: p.tokenUses}, nil
 	}
 
 	// 如果 token 无效，则启动完整的刷新流程
 	logger.Infof("Refreshing token...")
-	return p.refreshToken()
+	token, err := p.refreshToken()
+	if err != nil {
+		return tokenInfo{}, err
+	}
+	p.tokenUses = 1
+	return tokenInfo{value: token, fresh: true, uses: 1}, nil
 }
 
 // refreshToken 执行获取新 token 的完整流程。
@@ -154,7 +193,9 @@ func (p *Provider) GetToken() (string, error) {
 func (p *Provider) refreshToken() (string, error) {
 	// 1. 获取挑战 JS
 	jsCode := p.jsCode.Value
-	if !p.jsCode.isValid() {
+	if p.jsCode.isValid() {
+		logger.Infof("Using cached challenge (expires in %s)", fmtDur(time.Until(p.jsCode.ExpireAt)))
+	} else {
 		var err error
 		jsCode, err = p.getScripts(true)
 		if err != nil {
@@ -165,7 +206,9 @@ func (p *Provider) refreshToken() (string, error) {
 	}
 
 	// 2. 在内嵌 Goja 运行时中执行挑战，不依赖外部浏览器。
+	start := time.Now()
 	token, err := generateVQDToken(jsCode)
+	logger.Debugf("Solved VQD challenge in %s", fmtDur(time.Since(start)))
 	if err != nil {
 		return "", fmt.Errorf("goja VQD generation failed: %w", err)
 	}
@@ -190,6 +233,8 @@ func (p *Provider) cacheToken(token string) {
 		Value:    token,
 		ExpireAt: time.Now().Add(p.tokenExpiration),
 	}
+	p.tokenAt = time.Now()
+	p.tokenUses = 0
 }
 
 // getScripts 从 DuckDuckGo status 接口获取用于生成 token 的 JS 代码。
@@ -208,13 +253,16 @@ func (p *Provider) getScripts(fresh bool) (string, error) {
 		header.Set("x-vqd-accept", "1")
 	}
 
-	logger.Infof("Get scripts from /duckchat/v1/status")
-	client, _ := p.currentClient()
+	client, gen := p.currentClient()
+	start := time.Now()
 	response, err := client.Request(httpclient.GET, "https://duck.ai/duckchat/v1/status", header, nil, nil)
 	if err != nil {
+		logger.Warnf("[status] gen=%d error after %s: %v", gen, fmtDur(time.Since(start)), err)
 		return "", err
 	}
 	defer response.Body.Close()
+	logger.Infof("[status] gen=%d code=%d dur=%s challenge=%t%s", gen, response.StatusCode, fmtDur(time.Since(start)),
+		response.Header.Get("x-vqd-hash-1") != "", setCookieSummary(response.Header))
 
 	if response.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("status request failed with code: %d", response.StatusCode)
@@ -270,27 +318,57 @@ func isRetryableStatus(code int) bool {
 // 连续失败达到 sessionResetAfter 次后会重建 HTTP 客户端并重新预热会话，
 // 效果等同于重启容器（清空 cookie、连接池并更换 TLS 指纹）。
 // 最后一次仍失败时，原样返回上游响应，交给调用方的错误处理。
+//
+// 每次尝试都会输出一行 "[upstream] req=N attempt=i/n ..." 的 key=value 日志，便于事后统计
+// 418 与会话年龄、token 复用、空闲时长、并发数之间的关系。
 func (p *Provider) doWithRetry(method httpclient.HttpMethod, url string, body []byte, decorate func(httpclient.AuroraHeaders)) (*http.Response, error) {
+	reqID := atomic.AddUint64(&p.reqSeq, 1)
+	inflight := atomic.AddInt64(&p.inflight, 1)
+	released := false
+	release := func() {
+		if !released {
+			released = true
+			atomic.AddInt64(&p.inflight, -1)
+		}
+	}
+	defer func() {
+		// 未把响应交给调用方（出错返回）时在此释放；交出响应时由 body.Close 释放
+		release()
+	}()
+
+	start := time.Now()
+	idleBefore := p.idleSinceSuccess()
+	endpoint := shortEndpoint(url)
+	logger.Infof("[upstream] req=%d start %s %s idle_before=%s inflight=%d", reqID, method, endpoint, fmtDur(idleBefore), inflight)
+
 	var lastErr error
 	failures := 0
-	p.resetIfIdle()
+	resets := 0
+	if p.resetIfIdle(reqID, idleBefore) {
+		resets++
+	}
 	for attempt := 0; attempt < p.maxAttempts; attempt++ {
+		tag := fmt.Sprintf("req=%d attempt=%d/%d", reqID, attempt+1, p.maxAttempts)
 		if failures > 0 && p.sessionResetAfter > 0 && failures%p.sessionResetAfter == 0 {
-			p.resetSession()
+			if p.resetSession(fmt.Sprintf("req=%d after %d consecutive failures", reqID, failures)) {
+				resets++
+			}
 		}
 
-		token, err := p.GetToken()
+		tok, err := p.acquireToken()
 		if err != nil {
 			lastErr = fmt.Errorf("failed to get VQD token: %w", err)
 			failures++
 			p.clearCache()
-			sleep(retryDelay(attempt, 0))
+			delay := retryDelay(attempt, 0)
+			logger.Warnf("[upstream] %s token_error elapsed=%s next_delay=%s err=%v", tag, fmtDur(time.Since(start)), fmtDur(delay), err)
+			sleep(delay)
 			continue
 		}
 
 		header := createHeader()
 		decorate(header)
-		header.Set("x-vqd-hash-1", token)
+		header.Set("x-vqd-hash-1", tok.value)
 		header.Set("x-fe-signals", makeFESignals())
 		header.Set("x-fe-version", p.feVersion)
 
@@ -298,35 +376,53 @@ func (p *Provider) doWithRetry(method httpclient.HttpMethod, url string, body []
 		if body != nil {
 			reader = bytes.NewReader(body)
 		}
-		client, gen := p.currentClient()
+		client, sess := p.useClient()
+		attemptStart := time.Now()
 		resp, err := client.Request(method, url, header, sessionCookies(), reader)
+		ctx := fmt.Sprintf("%s %s %s %s inflight=%d", tag, sess, tok, fmtElapsed(attemptStart, start), atomic.LoadInt64(&p.inflight))
 		if err != nil {
 			lastErr = err
 			failures++
-			p.markClientBroken(gen)
-			sleep(retryDelay(attempt, 0))
+			delay := retryDelay(attempt, 0)
+			logger.Warnf("[upstream] %s network_error next_delay=%s err=%v", ctx, fmtDur(delay), err)
+			p.markClientBroken(sess.gen, reqID)
+			sleep(delay)
 			continue
 		}
 
+		newChallenge := resp.Header.Get("x-vqd-hash-1") != ""
 		p.updateScriptsFromHeader(resp.Header)
 		if !isRetryableStatus(resp.StatusCode) {
 			if resp.StatusCode < 400 {
 				p.markSuccess()
+				logger.Infof("[upstream] %s status=%d ok resets=%d new_challenge=%t%s", ctx, resp.StatusCode, resets, newChallenge, setCookieSummary(resp.Header))
+			} else {
+				logger.Warnf("[upstream] %s status=%d not_retryable resets=%d%s", ctx, resp.StatusCode, resets, setCookieSummary(resp.Header))
 			}
-			return resp, nil
-		}
-		if attempt == p.maxAttempts-1 {
+			p.wrapBody(resp, reqID, release)
 			return resp, nil
 		}
 
 		challengeBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		logger.Warnf("Duck.ai rejected request (%d), retrying (%d/%d): %s", resp.StatusCode, attempt+1, p.maxAttempts-1, string(challengeBody))
 		lastErr = fmt.Errorf("Duck.ai rejected request (%d): %s", resp.StatusCode, string(challengeBody))
+		logger.Debugf("[upstream] %s raw_body=%s", tag, string(challengeBody))
+		if attempt == p.maxAttempts-1 {
+			logger.Warnf("[upstream] %s status=%d gave_up resets=%d %s%s", ctx, resp.StatusCode, resets, summarizeChallenge(challengeBody), setCookieSummary(resp.Header))
+			resp.Body = io.NopCloser(bytes.NewReader(challengeBody))
+			p.wrapBody(resp, reqID, release)
+			return resp, nil
+		}
+
+		retryAfter := resp.Header.Get("Retry-After")
+		delay := retryDelay(attempt, parseRetryAfter(retryAfter))
+		logger.Warnf("[upstream] %s status=%d %s retry_after=%q next_delay=%s new_challenge=%t%s",
+			ctx, resp.StatusCode, summarizeChallenge(challengeBody), retryAfter, fmtDur(delay), newChallenge, setCookieSummary(resp.Header))
 		failures++
 		p.clearCache()
-		sleep(retryDelay(attempt, parseRetryAfter(resp.Header.Get("Retry-After"))))
+		sleep(delay)
 	}
+	logger.Warnf("[upstream] req=%d failed attempts=%d resets=%d elapsed=%s err=%v", reqID, p.maxAttempts, resets, fmtDur(time.Since(start)), lastErr)
 	return nil, lastErr
 }
 
@@ -365,24 +461,43 @@ func (p *Provider) markSuccess() {
 	p.clientMutex.Unlock()
 }
 
-// resetIfIdle 在会话空闲过久时提前重建会话。
-// 日志显示空闲十几分钟后的首个请求几乎必然 418，而重建并预热会话后即可恢复，
-// 因此在请求前主动重建，避免先吃一轮 418 再重试。
-func (p *Provider) resetIfIdle() {
+// idleSinceSuccess 返回距最近一次上游成功的时长（从未成功返回 0）。
+func (p *Provider) idleSinceSuccess() time.Duration {
+	p.clientMutex.Lock()
+	defer p.clientMutex.Unlock()
+	if p.lastSuccess.IsZero() {
+		return 0
+	}
+	return time.Since(p.lastSuccess)
+}
+
+// resetIfIdle 在会话空闲过久时提前重建会话，返回是否真的重建了。
+func (p *Provider) resetIfIdle(reqID uint64, idle time.Duration) bool {
 	if p.idleResetAfter <= 0 || p.newClient == nil {
-		return
+		return false
 	}
 	p.clientMutex.Lock()
-	idle := !p.lastSuccess.IsZero() && time.Since(p.lastSuccess) > p.idleResetAfter
-	if idle {
+	isIdle := !p.lastSuccess.IsZero() && time.Since(p.lastSuccess) > p.idleResetAfter
+	if isIdle {
 		// 先占位，避免并发请求重复触发
 		p.lastSuccess = time.Now()
 	}
 	p.clientMutex.Unlock()
-	if idle {
-		logger.Infof("Duck.ai session idle for over %s, rebuilding session before request.", p.idleResetAfter)
-		p.resetSession()
+	if !isIdle {
+		return false
 	}
+	return p.resetSession(fmt.Sprintf("req=%d idle %s > %s", reqID, fmtDur(idle), p.idleResetAfter))
+}
+
+// sessionInfo 是一次请求所用客户端会话的快照。
+type sessionInfo struct {
+	gen  uint64
+	age  time.Duration
+	reqs int // 含本次在内，在该客户端上发出的上游 API 请求数
+}
+
+func (s sessionInfo) String() string {
+	return fmt.Sprintf("gen=%d sess_age=%s sess_reqs=%d", s.gen, fmtDur(s.age), s.reqs)
 }
 
 // currentClient 返回当前 HTTP 客户端及其代际编号。
@@ -392,28 +507,43 @@ func (p *Provider) currentClient() (httpclient.AuroraHttpClient, uint64) {
 	return p.client, p.clientGen
 }
 
+// useClient 返回当前客户端，并把本次请求计入会话请求数。
+func (p *Provider) useClient() (httpclient.AuroraHttpClient, sessionInfo) {
+	p.clientMutex.Lock()
+	defer p.clientMutex.Unlock()
+	p.sessionReqs++
+	info := sessionInfo{gen: p.clientGen, reqs: p.sessionReqs}
+	if !p.sessionAt.IsZero() {
+		info.age = time.Since(p.sessionAt)
+	}
+	return p.client, info
+}
+
 // markClientBroken 在网络错误时重建客户端；仅当 gen 仍为当前代际时才重建，避免并发请求重复重建。
-func (p *Provider) markClientBroken(gen uint64) {
+func (p *Provider) markClientBroken(gen uint64, reqID uint64) {
 	p.clientMutex.Lock()
 	stale := gen != p.clientGen
 	p.clientMutex.Unlock()
 	if !stale {
-		p.resetSession()
+		p.resetSession(fmt.Sprintf("req=%d network error on gen=%d", reqID, gen))
 	}
 }
 
 // resetSession 重建 HTTP 客户端、清空缓存并重新预热会话，相当于进程内“重启”。
-// 在 sessionResetCooldown 内只执行一次，避免并发请求同时触发重建。
-func (p *Provider) resetSession() {
+// 在 sessionResetCooldown 内只执行一次，避免并发请求同时触发重建。返回是否真的重建了。
+func (p *Provider) resetSession(reason string) bool {
 	if p.newClient == nil {
 		p.clearCache()
-		return
+		return false
 	}
 	p.clientMutex.Lock()
-	if time.Since(p.lastReset) < sessionResetCooldown {
+	if since := time.Since(p.lastReset); since < sessionResetCooldown {
+		gen := p.clientGen
 		p.clientMutex.Unlock()
-		return
+		logger.Infof("[session] reset skipped (%s): gen=%d was rebuilt %s ago, cooldown %s", reason, gen, fmtDur(since), sessionResetCooldown)
+		return false
 	}
+	oldGen, oldAge, oldReqs := p.clientGen, time.Since(p.sessionAt), p.sessionReqs
 	client := p.newClient()
 	if p.proxyURL != "" {
 		client.SetProxy(p.proxyURL)
@@ -421,11 +551,40 @@ func (p *Provider) resetSession() {
 	p.client = client
 	p.clientGen++
 	p.lastReset = time.Now()
+	p.sessionAt = p.lastReset
+	p.sessionReqs = 0
+	newGen := p.clientGen
 	p.clientMutex.Unlock()
 
 	p.clearCache()
-	logger.Warnf("Duck.ai session reset: rebuilt HTTP client and re-warming session.")
-	p.warmSession()
+	logger.Warnf("[session] reset gen=%d->%d reason=%q old_age=%s old_reqs=%d", oldGen, newGen, reason, fmtDur(oldAge), oldReqs)
+	p.warmSession(reason)
+	return true
+}
+
+// wrapBody 在响应体关闭时释放 inflight 计数并记录流持续时间。
+func (p *Provider) wrapBody(resp *http.Response, reqID uint64, release func()) {
+	if resp.Body == nil {
+		release()
+		return
+	}
+	resp.Body = &trackedBody{ReadCloser: resp.Body, start: time.Now(), onClose: func(d time.Duration) {
+		release()
+		logger.Debugf("[upstream] req=%d body closed after %s inflight=%d", reqID, fmtDur(d), atomic.LoadInt64(&p.inflight))
+	}}
+}
+
+type trackedBody struct {
+	io.ReadCloser
+	start   time.Time
+	once    sync.Once
+	onClose func(time.Duration)
+}
+
+func (b *trackedBody) Close() error {
+	err := b.ReadCloser.Close()
+	b.once.Do(func() { b.onClose(time.Since(b.start)) })
+	return err
 }
 
 // updateScriptsFromHeader 从响应头中提取并更新缓存的 JS 代码。
@@ -451,7 +610,7 @@ func (p *Provider) updateScriptsFromHeader(header http.Header) {
 	logger.Debugf("Updated JS scripts from response header.")
 }
 
-func (p *Provider) warmSession() {
+func (p *Provider) warmSession(reason string) {
 	// 顶层导航请求：浏览器不会带 content-type / origin / referer
 	header := createHeader()
 	delete(header, "content-type")
@@ -464,15 +623,21 @@ func (p *Provider) warmSession() {
 	header.Set("sec-fetch-user", "?1")
 	header.Set("upgrade-insecure-requests", "1")
 
-	client, _ := p.currentClient()
-	if resp, err := client.Request(httpclient.GET, "https://duck.ai/", header, sessionCookies(), nil); err == nil && resp != nil {
-		io.Copy(io.Discard, resp.Body)
+	client, gen := p.currentClient()
+	start := time.Now()
+	parts := make([]string, 0, 2)
+	for _, u := range []string{"https://duck.ai/", "https://duck.ai/chat?ia=chat&duckai=1"} {
+		t := time.Now()
+		resp, err := client.Request(httpclient.GET, u, header, sessionCookies(), nil)
+		if err != nil || resp == nil {
+			parts = append(parts, fmt.Sprintf("%s=err(%v)", shortEndpoint(u), err))
+			continue
+		}
+		n, _ := io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
+		parts = append(parts, fmt.Sprintf("%s=%d/%dB/%s%s", shortEndpoint(u), resp.StatusCode, n, fmtDur(time.Since(t)), setCookieSummary(resp.Header)))
 	}
-	if resp, err := client.Request(httpclient.GET, "https://duck.ai/chat?ia=chat&duckai=1", header, sessionCookies(), nil); err == nil && resp != nil {
-		io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
-	}
+	logger.Infof("[session] warm gen=%d reason=%q total=%s %s", gen, reason, fmtDur(time.Since(start)), strings.Join(parts, " "))
 }
 
 func sessionCookies() []*http.Cookie {
@@ -516,4 +681,79 @@ func maxInt64(a, b int64) int64 {
 		return a
 	}
 	return b
+}
+
+// fmtDur 以紧凑形式输出时长，便于日志统计。
+func fmtDur(d time.Duration) string {
+	switch {
+	case d <= 0:
+		return "0s"
+	case d < time.Second:
+		return fmt.Sprintf("%dms", d.Milliseconds())
+	case d < time.Minute:
+		return fmt.Sprintf("%.1fs", d.Seconds())
+	default:
+		return d.Round(time.Second).String()
+	}
+}
+
+func fmtElapsed(attemptStart, reqStart time.Time) string {
+	return fmt.Sprintf("dur=%s elapsed=%s", fmtDur(time.Since(attemptStart)), fmtDur(time.Since(reqStart)))
+}
+
+// shortEndpoint 去掉 scheme 与域名，只保留路径部分。
+func shortEndpoint(u string) string {
+	if i := strings.Index(u, "://"); i >= 0 {
+		u = u[i+3:]
+		if j := strings.IndexByte(u, '/'); j >= 0 {
+			return u[j:]
+		}
+		return "/"
+	}
+	return u
+}
+
+// setCookieSummary 列出响应设置的 cookie 名称（不含值），无则返回空串。
+func setCookieSummary(h http.Header) string {
+	cookies := h.Values("Set-Cookie")
+	if len(cookies) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(cookies))
+	for _, c := range cookies {
+		name, _, _ := strings.Cut(c, "=")
+		names = append(names, strings.TrimSpace(name))
+	}
+	return " set_cookie=" + strings.Join(names, ",")
+}
+
+// summarizeChallenge 把 418 返回体压缩为便于统计的 key=value。
+// p 是服务端下发的一组哈希，观察到它在重建会话前后不变，疑似与 IP/服务端风控状态绑定。
+func summarizeChallenge(body []byte) string {
+	var ch struct {
+		Type         string `json:"type"`
+		OverrideCode string `json:"overrideCode"`
+		CD           struct {
+			I  string `json:"i"`
+			P  string `json:"p"`
+			R  string `json:"r"`
+			SC int    `json:"sc"`
+			E  int    `json:"e"`
+		} `json:"cd"`
+	}
+	if err := json.Unmarshal(body, &ch); err != nil {
+		b := string(body)
+		if len(b) > 200 {
+			b = b[:200] + "..."
+		}
+		return fmt.Sprintf("body=%q", b)
+	}
+	segs := strings.Split(ch.CD.P, "-")
+	for i, s := range segs {
+		if len(s) > 8 {
+			segs[i] = s[:8]
+		}
+	}
+	return fmt.Sprintf("ch_type=%s ch_override=%s ch_i=%s ch_sc=%d ch_e=%d ch_r=%s p=%s",
+		ch.Type, ch.OverrideCode, ch.CD.I, ch.CD.SC, ch.CD.E, ch.CD.R, strings.Join(segs, ","))
 }

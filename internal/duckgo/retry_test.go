@@ -52,6 +52,7 @@ func newTestProvider(t *testing.T, statuses []int, maxAttempts int) (*Provider, 
 	}
 	p := &Provider{
 		client:            newClient(),
+		sessionAt:         time.Now(),
 		newClient:         newClient,
 		maxAttempts:       maxAttempts,
 		sessionResetAfter: 2,
@@ -111,5 +112,37 @@ func TestIdleSessionIsRebuiltBeforeRequest(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(created); got != 2 {
 		t.Fatalf("clients created = %d, want 2 (no rebuild when active)", got)
+	}
+}
+
+func TestIdleResetDoesNotSwallowLaterFailureReset(t *testing.T) {
+	// 空闲重建后紧接着的失败重置会被冷却期跳过；确认请求仍能在后续尝试成功，且不会多建客户端
+	p, chatCalls, created := newTestProvider(t, []int{http.StatusTeapot, http.StatusTeapot, http.StatusOK}, 5)
+	p.sessionResetAfter = 1
+	p.idleResetAfter = time.Minute
+	p.lastSuccess = time.Now().Add(-2 * time.Minute)
+
+	resp, err := p.PostConversation(duckgotypes.ApiRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if got := atomic.LoadInt32(chatCalls); got != 3 {
+		t.Fatalf("chat calls = %d, want 3", got)
+	}
+	if got := atomic.LoadInt32(created); got != 2 {
+		t.Fatalf("clients created = %d, want 2 (idle rebuild only, failure resets in cooldown)", got)
+	}
+	if got := atomic.LoadInt64(&p.inflight); got != 0 {
+		t.Fatalf("inflight = %d after body close, want 0", got)
+	}
+}
+
+func TestSummarizeChallenge(t *testing.T) {
+	body := `{"action":"error","status":418,"type":"ERR_CHALLENGE","overrideCode":"d78d","cd":{"e":0,"i":"3","p":"036ef386126084b6275ff34fabda050d-57c08aa2aaaaaaaaaaaaaaaaaaaaaaaa","r":"usw","sc":1}}`
+	got := summarizeChallenge([]byte(body))
+	want := "ch_type=ERR_CHALLENGE ch_override=d78d ch_i=3 ch_sc=1 ch_e=0 ch_r=usw p=036ef386,57c08aa2"
+	if got != want {
+		t.Fatalf("summary = %q, want %q", got, want)
 	}
 }

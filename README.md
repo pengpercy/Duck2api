@@ -113,7 +113,7 @@ FE_VERSION=... # 可覆盖默认 x-fe-version
 TOKEN_EXPIRATION_SECONDS=1 # challenge/token 本地缓存秒数
 SCRIPTS_CACHE_SECONDS= # challenge JS 缓存秒数，默认不缓存（每次请求取新挑战）
 UPSTREAM_MAX_RETRIES=6 # 上游返回 418/429 时的自动重试次数
-SESSION_RESET_AFTER_FAILURES=1 # 连续失败多少次后重建 HTTP 会话（等同重启容器），0 为关闭
+SESSION_RESET_AFTER_FAILURES=4 # 连续失败多少次后重建 HTTP 会话（等同重启容器），0 为关闭
 IDLE_SESSION_RESET_SECONDS=120 # 空闲超过该秒数后，下次请求前先重建会话，0 为关闭
 ```
 

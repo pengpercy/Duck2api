@@ -304,7 +304,7 @@ curl http://localhost:8080/ping
 | `TOKEN_EXPIRATION_SECONDS` | `1` | VQD token 缓存 |
 | `SCRIPTS_CACHE_SECONDS` | `0` | challenge JS 缓存（默认不缓存，每次请求取新挑战） |
 | `UPSTREAM_MAX_RETRIES` | `6` | 上游 418/429 自动重试次数 |
-| `SESSION_RESET_AFTER_FAILURES` | `1` | 连续失败 N 次后重建 HTTP 会话（0 关闭） |
+| `SESSION_RESET_AFTER_FAILURES` | `4` | 连续失败 N 次后重建 HTTP 会话（0 关闭）。418 风控状态在服务端，重建会话通常无效，同会话稍等重试更易通过 |
 | `IDLE_SESSION_RESET_SECONDS` | `120` | 空闲超过 N 秒后，下次请求前先重建会话（0 关闭） |
 | `CLAUDE_CODE_EFFORT_LEVEL` | 空 | Anthropic 未提供 `thinking` 时的默认推理档位 |
 

@@ -18,6 +18,7 @@ require (
 	github.com/pion/rtp v1.10.2
 	github.com/pion/webrtc/v4 v4.2.15
 	github.com/pkoukk/tiktoken-go v0.1.7
+	golang.org/x/net v0.50.0
 )
 
 require (
@@ -73,7 +74,6 @@ require (
 	github.com/wlynxg/anet v0.0.5 // indirect
 	golang.org/x/arch v0.9.0 // indirect
 	golang.org/x/crypto v0.48.0 // indirect
-	golang.org/x/net v0.50.0 // indirect
 	golang.org/x/sys v0.41.0 // indirect
 	golang.org/x/text v0.34.0 // indirect
 	golang.org/x/time v0.14.0 // indirect

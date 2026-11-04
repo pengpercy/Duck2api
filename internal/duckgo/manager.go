@@ -100,7 +100,8 @@ func NewProvider(newClient func() httpclient.AuroraHttpClient, proxyURL string) 
 		sessionAt: time.Now(),
 		newClient: newClient,
 		proxyURL:  proxyURL,
-		feVersion: getStringFromEnv("FE_VERSION", "serp_20260424_180649_ET-0bdc33b2a02ebf8f235def65d887787f694720a1"),
+		// 为空时使用预热时从 /chat 页面解析到的线上版本（见 frontend.go）
+		feVersion: getStringFromEnv("FE_VERSION", ""),
 		// 初始化缓存时间
 		tokenExpiration: getDurationFromEnv("TOKEN_EXPIRATION_SECONDS", 1*time.Second),
 		// 默认一次一用，每次请求都重新求解挑战。
@@ -300,6 +301,12 @@ func (p *Provider) PostConversation(request duckgotypes.ApiRequest) (*http.Respo
 	}
 	return p.doWithRetry(httpclient.POST, "https://duck.ai/duckchat/v1/chat", bodyJSON, func(header httpclient.AuroraHeaders) {
 		header.Set("accept", "text/event-stream")
+		// 以下为网页每次发消息都会带的头（2026-11 抓包）
+		header.Set("x-duckai-continuation", "resubmit-context")
+		header.Set("x-duckai-consent-purposes", "user-location,image-generation,web-search")
+		header.Set("x-duckai-tool-approval", "web-search")
+		header.Set("x-duckai-response-id", newUUID())
+		header.Set("x-ddg-journey-id", fmt.Sprintf("%016x%016x", rand.Uint64(), rand.Uint64()))
 	})
 }
 
@@ -385,7 +392,7 @@ func (p *Provider) doWithRetry(method httpclient.HttpMethod, url string, body []
 		decorate(header)
 		header.Set("x-vqd-hash-1", tok.value)
 		header.Set("x-fe-signals", makeFESignals())
-		header.Set("x-fe-version", p.feVersion)
+		header.Set("x-fe-version", p.currentFEVersion())
 
 		var reader io.Reader
 		if body != nil {
@@ -649,54 +656,62 @@ func (p *Provider) warmSession(reason string) {
 			parts = append(parts, fmt.Sprintf("%s=err(%v)", shortEndpoint(u), err))
 			continue
 		}
-		n, _ := io.Copy(io.Discard, resp.Body)
+		page, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		parts = append(parts, fmt.Sprintf("%s=%d/%dB/%s%s", shortEndpoint(u), resp.StatusCode, n, fmtDur(time.Since(t)), setCookieSummary(resp.Header)))
+		parts = append(parts, fmt.Sprintf("%s=%d/%dB/%s%s", shortEndpoint(u), resp.StatusCode, len(page), fmtDur(time.Since(t)), setCookieSummary(resp.Header)))
+		if resp.StatusCode == http.StatusOK && strings.Contains(u, "/chat") {
+			if note := updateFrontendFromHTML(client, page); note != "" {
+				parts = append(parts, strings.TrimSpace(note))
+			}
+		}
 	}
 	logger.Infof("[session] warm gen=%d reason=%q total=%s %s", gen, reason, fmtDur(time.Since(start)), strings.Join(parts, " "))
 }
 
+// sessionCookies 网页向 duck.ai 发请求时并不带这些 duckduckgo.com 的偏好 cookie，
+// 抓包只看到前端 JS 写入的 duckai_experiment_*，因此这里不再伪造任何 cookie。
 func sessionCookies() []*http.Cookie {
-	return []*http.Cookie{
-		{Name: "5", Value: "1"},
-		{Name: "ah", Value: "wt-wt"},
-		{Name: "dcs", Value: "1"},
-		{Name: "dcm", Value: "3"},
-		{Name: "isRecentChatOn", Value: "1"},
-	}
+	return nil
 }
 
+// currentFEVersion 优先使用 FE_VERSION 环境变量，其次是线上解析值，最后是内置的已知版本。
+func (p *Provider) currentFEVersion() string {
+	if p.feVersion != "" {
+		return p.feVersion
+	}
+	if f := currentFrontend(); f.beVersion != "" && f.feHash != "" {
+		return f.beVersion + "-" + f.feHash
+	}
+	return defaultFEVersion
+}
+
+const defaultFEVersion = "serp_20261104_113329_ET-4545a8eec81c4af6c8b0eeb41866f5e4a837945c"
+
+func newUUID() string {
+	var b [16]byte
+	for i := range b {
+		b[i] = byte(rand.Intn(256))
+	}
+	b[6] = b[6]&0x0f | 0x40
+	b[8] = b[8]&0x3f | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
+
+// makeFESignals 模拟网页的 x-fe-signals：start 是上一次发消息（或页面加载）的时间戳，end 是距今毫秒数。
+// 抓包中后续消息的 events 通常为空，新对话时只有 startNewChat_free 一类真实事件名。
 func makeFESignals() string {
-	now := time.Now().UnixMilli()
-	duration := int64(3000)
-	t := int64(80 + rand.Intn(100))
-	events := []map[string]any{
-		{"name": "onboarding_impression_1", "delta": t},
+	end := int64(4000 + rand.Intn(40000))
+	events := []map[string]any{}
+	if rand.Intn(2) == 0 {
+		events = append(events, map[string]any{"name": "startNewChat_free", "delta": end - int64(150+rand.Intn(400))})
 	}
-	t += int64(120 + rand.Intn(140))
-	events = append(events, map[string]any{"name": "onboarding_impression_2", "delta": t})
-	t += int64(200 + rand.Intn(300))
-	events = append(events, map[string]any{"name": "startNewChat", "delta": t})
-	for i := 0; i < 6+rand.Intn(12); i++ {
-		t += int64(40 + rand.Intn(140))
-		events = append(events, map[string]any{"name": "user_input", "delta": t})
-	}
-	t += int64(120 + rand.Intn(230))
-	events = append(events, map[string]any{"name": "user_submit", "delta": t})
 	payload := map[string]any{
-		"start":  now - duration,
+		"start":  time.Now().UnixMilli() - end,
 		"events": events,
-		"end":    maxInt64(t+int64(20+rand.Intn(70)), duration),
+		"end":    end,
 	}
 	data, _ := json.Marshal(payload)
 	return base64.StdEncoding.EncodeToString(data)
-}
-
-func maxInt64(a, b int64) int64 {
-	if a > b {
-		return a
-	}
-	return b
 }
 
 // fmtDur 以紧凑形式输出时长，便于日志统计。

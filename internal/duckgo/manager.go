@@ -103,16 +103,17 @@ func NewProvider(newClient func() httpclient.AuroraHttpClient, proxyURL string) 
 		feVersion: getStringFromEnv("FE_VERSION", "serp_20260424_180649_ET-0bdc33b2a02ebf8f235def65d887787f694720a1"),
 		// 初始化缓存时间
 		tokenExpiration: getDurationFromEnv("TOKEN_EXPIRATION_SECONDS", 1*time.Second),
-		// 同一 vqd hash 复用到第 2~4 次时，上游会返回 418 ERR_BN_LIMIT 并让会话进入短时风控，
-		// 默认一次一用：每次请求都基于最新下发的挑战重新求解，与浏览器行为一致。
+		// 默认一次一用，每次请求都重新求解挑战。
 		tokenMaxUses: getIntFromEnv("TOKEN_MAX_USES", 1),
 		// 默认不缓存挑战 JS：每个新请求都从 /status 取新挑战，复用旧挑战容易触发 418
+		// 必须保持 0：缓存后会改用 chat 响应头下发的挑战求解，实测同一会话 4~8 次后必然 418 ERR_BN_LIMIT，
+		// 且首次尝试通过率从 ~58% 降到 ~25%；每次从 /status 取新挑战则未再出现 ERR_BN_LIMIT。
 		scriptsCacheDuration: getDurationFromEnv("SCRIPTS_CACHE_SECONDS", 0),
 		maxAttempts:          getIntFromEnv("UPSTREAM_MAX_RETRIES", 6) + 1,
-		// 418 的风控状态绑定在服务端（重建会话后返回体里的 p 不变），重建会话基本无效，
-		// 同一会话稍等重试反而更容易通过，因此默认连续失败 4 次才重建。
-		// 例外：ERR_BN_LIMIT 绑定在会话上，遇到时立即重建（见 doWithRetry）。
-		sessionResetAfter: getIntFromEnv("SESSION_RESET_AFTER_FAILURES", 4),
+		// 实测连续 418 两次就重建，第 3 次尝试的通过率约 40%（4 次才重建时约 12%）。
+		// 但若返回体里的 p 在整段时间内不变，通常是 IP 级风控窗口，重建也无济于事，只能靠退避等待。
+		// ERR_BN_LIMIT 绑定在会话上，遇到时立即重建（见 doWithRetry）。
+		sessionResetAfter: getIntFromEnv("SESSION_RESET_AFTER_FAILURES", 2),
 		// 新建会话首个请求 418 的概率很高（实测 10/13），而长时间空闲的老会话并无明显劣势，
 		// 因此只在空闲很久后才重建。
 		idleResetAfter: time.Duration(getIntFromEnv("IDLE_SESSION_RESET_SECONDS", 1800)) * time.Second,

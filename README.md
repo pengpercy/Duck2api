@@ -111,10 +111,10 @@ FE_VERSION=... # 可覆盖默认 x-fe-version
 
 ```bash
 TOKEN_EXPIRATION_SECONDS=1 # challenge/token 本地缓存秒数
-TOKEN_MAX_USES=1 # 单个 token 最多使用次数，复用会触发 418 ERR_BN_LIMIT，建议保持 1
-SCRIPTS_CACHE_SECONDS= # challenge JS 缓存秒数，默认不缓存（每次请求取新挑战）
+TOKEN_MAX_USES=1 # 单个 token 最多使用次数，建议保持 1（每次请求重新求解）
+SCRIPTS_CACHE_SECONDS= # challenge JS 缓存秒数，请保持默认 0；设为正数会改用响应头里的挑战，频繁触发 418 ERR_BN_LIMIT
 UPSTREAM_MAX_RETRIES=6 # 上游返回 418/429 时的自动重试次数
-SESSION_RESET_AFTER_FAILURES=4 # 连续失败多少次后重建 HTTP 会话（等同重启容器），0 为关闭
+SESSION_RESET_AFTER_FAILURES=2 # 连续失败多少次后重建 HTTP 会话（等同重启容器），0 为关闭
 IDLE_SESSION_RESET_SECONDS=1800 # 空闲超过该秒数后，下次请求前先重建会话，0 为关闭
 ```
 

@@ -53,7 +53,7 @@ func TestRefreshTokenUsesGoja(t *testing.T) {
 		cfg: config{tokenExpiration: time.Minute},
 		tok: tokenState{challenge: cachedItem[string]{Value: "challenge", ExpireAt: time.Now().Add(time.Minute)}},
 	}
-	token, err := p.refreshToken()
+	token, _, err := p.refreshToken()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +71,7 @@ func TestRefreshTokenReturnsGojaErrorWithoutFallback(t *testing.T) {
 		cfg: config{tokenExpiration: time.Minute},
 		tok: tokenState{challenge: cachedItem[string]{Value: "challenge", ExpireAt: time.Now().Add(time.Minute)}},
 	}
-	if _, err := p.refreshToken(); err == nil || !strings.Contains(err.Error(), "goja VQD generation failed") {
+	if _, _, err := p.refreshToken(); err == nil || !strings.Contains(err.Error(), "goja VQD generation failed") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

@@ -301,9 +301,12 @@ curl http://localhost:8080/ping
 | `TLS_CERT` / `TLS_KEY` | 空 | HTTPS 证书与私钥 |
 | `LOG_LEVEL` | — | 日志级别 |
 | `FE_VERSION` | 自动获取 | 覆盖 `x-fe-version`；默认在预热会话时从线上页面解析 |
-| `TOKEN_EXPIRATION_SECONDS` | `1` | VQD token 缓存 |
+| `X_USER_AGENT` | Windows Chrome 150 | 覆盖 UA，请求头与挑战求解同时使用 |
+| `X_VQD_STACK` | 自动计算 | 覆盖挑战应答的 `meta.stack`；默认从线上前端 bundle 计算 |
+| `X_VQD_ORIGIN` | `https://duck.ai` | 覆盖挑战应答的 `meta.origin` |
+| `TOKEN_EXPIRATION_SECONDS` | `1` | 求解出的 VQD token 缓存秒数 |
 | `TOKEN_MAX_USES` | `1` | 单个 VQD token 最多使用次数（0 不限），建议保持 1 |
-| `SCRIPTS_CACHE_SECONDS` | `0` | challenge JS 缓存，建议保持 0（每次请求取新挑战） |
+| `SCRIPTS_CACHE_SECONDS` | `300` | 响应头下发的下一个挑战的有效期（与网页一致，每个挑战只用一次）；过期或为 `0` 时向 `/status` 取挑战 |
 | `UPSTREAM_MAX_RETRIES` | `6` | 上游 418/429 自动重试次数 |
 | `SESSION_RESET_AFTER_FAILURES` | `2` | 连续失败 N 次后重建 HTTP 会话（0 关闭）。遇到 `ERR_BN_LIMIT` 时立即重建 |
 | `IDLE_SESSION_RESET_SECONDS` | `1800` | 空闲超过 N 秒后，下次请求前先重建会话（0 关闭） |

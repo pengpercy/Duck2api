@@ -14,23 +14,14 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// Handler 结构体现在直接依赖于 duckgo.Provider。
-// Provider 封装了所有与 DuckDuckGo API 交互的复杂逻辑，
-// 包括 HTTP 客户端、代理、以及 Token 的获取和缓存。
+// Handler 承载所有 HTTP 接口；与 duck.ai 的交互（挑战、会话、重试）都在 duckgo.Provider 中。
 type Handler struct {
 	duckgoProvider *duckgo.Provider
 }
 
-// NewHandler 是 Handler 的构造函数。
-// 它负责初始化所有必要的依赖，包括 HTTP 客户端和核心的 duckgo.Provider。
-// Provider 初始化失败时返回 error。
 func NewHandler(proxy *proxys.IProxy) (*Handler, error) {
-	// 1. 获取代理地址
 	proxyUrl := proxy.GetProxyIP()
-
-	// 2. 初始化 duckgo.Provider
-	// Provider 将管理客户端、代理和 Token 的所有状态；
-	// 传入客户端工厂，以便在遇到 418/429 风控时重建会话
+	// 传入客户端工厂而非实例：Provider 重建会话时需要全新的客户端
 	newClient := func() httpclient.AuroraHttpClient { return bogdanfinn.NewStdClient() }
 	provider, err := duckgo.NewProvider(newClient, proxyUrl)
 	if err != nil {
@@ -58,8 +49,7 @@ func optionsHandler(c *gin.Context) {
 	c.JSON(200, gin.H{"status": "ok"})
 }
 
-// duckduckgo 是处理聊天请求的核心处理器。
-// 它的职责被大大简化：解析请求 -> 调用 Provider -> 格式化响应。
+// duckduckgo 处理 OpenAI 兼容的 /v1/chat/completions。
 func (h *Handler) duckduckgo(c *gin.Context) {
 	var original_request officialtypes.APIRequest
 	if err := c.BindJSON(&original_request); err != nil {
@@ -77,12 +67,9 @@ func (h *Handler) duckduckgo(c *gin.Context) {
 	if err == nil && bodyJSON != nil {
 		logger.Debugf(string(bodyJSON))
 	}
-	// 将 OpenAI 格式的请求转换为 DuckDuckGo 格式
 	webSearch := original_request.WebSearch != nil && *original_request.WebSearch
 	translatedRequest := duckgoConvert.ConvertAPIRequestWithOptions(original_request, original_request.ReasoningEffort, webSearch)
 
-	// 调用 Provider 的方法来处理会话。
-	// Token 获取、缓存、刷新等所有复杂逻辑都在 Provider 内部自动完成。
 	response, err := h.duckgoProvider.PostConversation(translatedRequest)
 	if err != nil {
 		c.JSON(500, gin.H{"error": "Failed to post conversation to upstream: " + err.Error()})
@@ -90,14 +77,11 @@ func (h *Handler) duckduckgo(c *gin.Context) {
 	}
 	defer response.Body.Close()
 
-	// 使用重构后的错误处理函数
 	if duckgo.HandleRequestError(c, response, h.duckgoProvider) {
 		return
 	}
 	stream := original_request.Stream
-	// 非流式：一次性读取所有消息片段并聚合成完整响应
 	fullMessage := duckgo.StreamHandler(c, response, translatedRequest, stream)
-	// 根据请求决定是流式响应还是聚合响应
 	if !stream {
 		c.JSON(200, officialtypes.NewChatCompletionWithModel(fullMessage, translatedRequest.Model))
 	}
@@ -105,8 +89,6 @@ func (h *Handler) duckduckgo(c *gin.Context) {
 
 // engines 返回支持的模型列表。
 func (h *Handler) engines(c *gin.Context) {
-	// 此处为了简洁，直接硬编码模型列表。
-	// 在实际应用中，可以考虑从配置或 Provider 中获取。
 	supportedModels := []string{
 		"gpt-5.4-mini",
 		"gpt-5.4-nano",

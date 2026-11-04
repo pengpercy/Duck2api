@@ -1,7 +1,6 @@
 package duckgo
 
 import (
-	"aurora/httpclient"
 	duckgotypes "aurora/typings/duckgo"
 	officialtypes "aurora/typings/official"
 	"bufio"
@@ -13,41 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// createHeader 构造与 VQD 挑战中模拟的浏览器一致的请求头：
-// user-agent / sec-ch-ua / accept-language 必须与挑战 JS 看到的 navigator
-// (vqdUserAgent()、platform=Win32、languages=en-US) 对得上，否则上游风控更容易返回 418。
-func createHeader() httpclient.AuroraHeaders {
-	ua := vqdUserAgent()
-	header := make(httpclient.AuroraHeaders)
-	header.Set("accept-language", "en-US,en;q=0.9")
-	header.Set("content-type", "application/json")
-	header.Set("origin", "https://duck.ai")
-	header.Set("referer", "https://duck.ai/")
-	header.Set("user-agent", ua)
-	header.Set("sec-fetch-dest", "empty")
-	header.Set("sec-fetch-mode", "cors")
-	header.Set("sec-fetch-site", "same-origin")
-	if major := chromeMajorVersion(ua); major != "" {
-		header.Set("sec-ch-ua", `"Chromium";v="`+major+`", "Google Chrome";v="`+major+`", "Not.A/Brand";v="99"`)
-		header.Set("sec-ch-ua-mobile", "?0")
-		header.Set("sec-ch-ua-platform", `"Windows"`)
-	}
-	return header
-}
-
-// chromeMajorVersion 从 UA 中提取 Chrome 主版本号，非 Chrome UA 返回空串。
-func chromeMajorVersion(ua string) string {
-	i := strings.Index(ua, "Chrome/")
-	if i < 0 {
-		return ""
-	}
-	v := ua[i+len("Chrome/"):]
-	if j := strings.IndexByte(v, '.'); j > 0 {
-		return v[:j]
-	}
-	return ""
-}
-
+// HandleRequestError 把非 200 的上游响应转换成 OpenAI 风格的错误返回，已处理时返回 true。
 func HandleRequestError(c *gin.Context, response *http.Response, provider *Provider) bool {
 	if response.StatusCode == http.StatusOK {
 		return false
@@ -83,6 +48,7 @@ func HandleRequestError(c *gin.Context, response *http.Response, provider *Provi
 	return true
 }
 
+// StreamHandler 把上游 SSE 转发为 OpenAI 格式（stream=false 时只累积），返回完整回复文本。
 func StreamHandler(c *gin.Context, response *http.Response, originalRequest duckgotypes.ApiRequest, stream bool) string {
 	contentType := "text/event-stream; charset=utf-8"
 	if !stream {
@@ -98,9 +64,6 @@ func StreamHandler(c *gin.Context, response *http.Response, originalRequest duck
 	for {
 		line, err := reader.ReadString('\n')
 		if err != nil {
-			if err == io.EOF {
-				break
-			}
 			break
 		}
 

@@ -11,7 +11,7 @@ import (
 )
 
 func TestGenerateVQDTokenFromJS(t *testing.T) {
-	token, err := generateVQDTokenFromJS(`(function () {
+	token, err := solveChallenge(`(function () {
 		return {client_hashes: ["first", "second"], meta: {v: "4"}};
 	})()`)
 	if err != nil {
@@ -50,8 +50,8 @@ func TestRefreshTokenUsesGoja(t *testing.T) {
 	}
 
 	p := &Provider{
-		jsCode:          cachedItem[string]{Value: "challenge", ExpireAt: time.Now().Add(time.Minute)},
-		tokenExpiration: time.Minute,
+		cfg: config{tokenExpiration: time.Minute},
+		tok: tokenState{challenge: cachedItem[string]{Value: "challenge", ExpireAt: time.Now().Add(time.Minute)}},
 	}
 	token, err := p.refreshToken()
 	if err != nil {
@@ -68,8 +68,8 @@ func TestRefreshTokenReturnsGojaErrorWithoutFallback(t *testing.T) {
 	generateVQDToken = func(string) (string, error) { return "", errors.New("challenge failed") }
 
 	p := &Provider{
-		jsCode:          cachedItem[string]{Value: "challenge", ExpireAt: time.Now().Add(time.Minute)},
-		tokenExpiration: time.Minute,
+		cfg: config{tokenExpiration: time.Minute},
+		tok: tokenState{challenge: cachedItem[string]{Value: "challenge", ExpireAt: time.Now().Add(time.Minute)}},
 	}
 	if _, err := p.refreshToken(); err == nil || !strings.Contains(err.Error(), "goja VQD generation failed") {
 		t.Fatalf("unexpected error: %v", err)

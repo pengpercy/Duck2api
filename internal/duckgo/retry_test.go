@@ -15,6 +15,7 @@ import (
 // fakeClient 对 status 接口返回挑战，对 chat 接口依次返回 statuses 中的状态码。
 type fakeClient struct {
 	statuses []int
+	bodies   []string // 可选：与 statuses 对应的 chat 响应体
 	calls    *int32
 }
 
@@ -30,6 +31,9 @@ func (f *fakeClient) Request(method httpclient.HttpMethod, url string, headers h
 	i := int(atomic.AddInt32(f.calls, 1)) - 1
 	if i < len(f.statuses) {
 		resp.StatusCode = f.statuses[i]
+	}
+	if i < len(f.bodies) {
+		resp.Body = io.NopCloser(strings.NewReader(f.bodies[i]))
 	}
 	return resp, nil
 }
@@ -144,5 +148,60 @@ func TestSummarizeChallenge(t *testing.T) {
 	want := "ch_type=ERR_CHALLENGE ch_override=d78d ch_i=3 ch_sc=1 ch_e=0 ch_r=usw p=036ef386,57c08aa2"
 	if got != want {
 		t.Fatalf("summary = %q, want %q", got, want)
+	}
+}
+
+func TestBNLimitResetsSessionImmediately(t *testing.T) {
+	p, chatCalls, created := newTestProvider(t, []int{http.StatusTeapot, http.StatusOK}, 5)
+	p.sessionResetAfter = 4
+	bn := `{"action":"error","status":418,"type":"ERR_BN_LIMIT","overrideCode":"090c"}`
+	bodies := []string{bn}
+	p.newClient = func() httpclient.AuroraHttpClient {
+		atomic.AddInt32(created, 1)
+		return &fakeClient{statuses: []int{http.StatusTeapot, http.StatusOK}, bodies: bodies, calls: chatCalls}
+	}
+	p.client = p.newClient()
+	p.sessionAt = time.Now().Add(-time.Minute) // 不在冷却期内
+
+	resp, err := p.PostConversation(duckgotypes.ApiRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if got := atomic.LoadInt32(created); got != 3 { // newTestProvider + 上面替换 + BN 重建
+		t.Fatalf("clients created = %d, want 3", got)
+	}
+}
+
+func TestTokenIsSingleUseByDefault(t *testing.T) {
+	originalGenerate := generateVQDToken
+	t.Cleanup(func() { generateVQDToken = originalGenerate })
+	n := 0
+	generateVQDToken = func(string) (string, error) { n++; return "t", nil }
+	p := &Provider{
+		jsCode:          cachedItem[string]{Value: "challenge", ExpireAt: time.Now().Add(time.Minute)},
+		tokenExpiration: time.Minute,
+		tokenMaxUses:    1,
+	}
+	for i := 0; i < 3; i++ {
+		info, err := p.acquireToken()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !info.fresh {
+			t.Fatalf("call %d reused cached token", i)
+		}
+	}
+	if n != 3 {
+		t.Fatalf("solves = %d, want 3", n)
+	}
+}
+
+func TestBodySummary(t *testing.T) {
+	if got := bodySummary([]byte(`{"model":"x","messages":[{},{},{}]}`)); got != " body_bytes=35 msgs=3" {
+		t.Fatalf("got %q", got)
 	}
 }

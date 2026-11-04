@@ -57,6 +57,7 @@ type Provider struct {
 	feVersion   string
 	// 从环境变量读取的缓存时间
 	tokenExpiration      time.Duration
+	tokenMaxUses         int // 单个 token 最多使用次数（0 不限），浏览器每条消息都重新求解
 	scriptsCacheDuration time.Duration
 	// 418/429 自动重试配置
 	maxAttempts       int
@@ -102,13 +103,19 @@ func NewProvider(newClient func() httpclient.AuroraHttpClient, proxyURL string) 
 		feVersion: getStringFromEnv("FE_VERSION", "serp_20260424_180649_ET-0bdc33b2a02ebf8f235def65d887787f694720a1"),
 		// 初始化缓存时间
 		tokenExpiration: getDurationFromEnv("TOKEN_EXPIRATION_SECONDS", 1*time.Second),
+		// 同一 vqd hash 复用到第 2~4 次时，上游会返回 418 ERR_BN_LIMIT 并让会话进入短时风控，
+		// 默认一次一用：每次请求都基于最新下发的挑战重新求解，与浏览器行为一致。
+		tokenMaxUses: getIntFromEnv("TOKEN_MAX_USES", 1),
 		// 默认不缓存挑战 JS：每个新请求都从 /status 取新挑战，复用旧挑战容易触发 418
 		scriptsCacheDuration: getDurationFromEnv("SCRIPTS_CACHE_SECONDS", 0),
 		maxAttempts:          getIntFromEnv("UPSTREAM_MAX_RETRIES", 6) + 1,
 		// 418 的风控状态绑定在服务端（重建会话后返回体里的 p 不变），重建会话基本无效，
 		// 同一会话稍等重试反而更容易通过，因此默认连续失败 4 次才重建。
+		// 例外：ERR_BN_LIMIT 绑定在会话上，遇到时立即重建（见 doWithRetry）。
 		sessionResetAfter: getIntFromEnv("SESSION_RESET_AFTER_FAILURES", 4),
-		idleResetAfter:    time.Duration(getIntFromEnv("IDLE_SESSION_RESET_SECONDS", 120)) * time.Second,
+		// 新建会话首个请求 418 的概率很高（实测 10/13），而长时间空闲的老会话并无明显劣势，
+		// 因此只在空闲很久后才重建。
+		idleResetAfter: time.Duration(getIntFromEnv("IDLE_SESSION_RESET_SECONDS", 1800)) * time.Second,
 	}
 	provider.warmSession("startup")
 	provider.lastSuccess = time.Now()
@@ -173,7 +180,7 @@ func (p *Provider) acquireToken() (tokenInfo, error) {
 	p.tokenMutex.Lock()
 	defer p.tokenMutex.Unlock()
 
-	if p.vqdToken.isValid() {
+	if p.vqdToken.isValid() && (p.tokenMaxUses <= 0 || p.tokenUses < p.tokenMaxUses) {
 		p.tokenUses++
 		return tokenInfo{value: p.vqdToken.Value, age: time.Since(p.tokenAt), uses: p.tokenUses}, nil
 	}
@@ -339,7 +346,7 @@ func (p *Provider) doWithRetry(method httpclient.HttpMethod, url string, body []
 	start := time.Now()
 	idleBefore := p.idleSinceSuccess()
 	endpoint := shortEndpoint(url)
-	logger.Infof("[upstream] req=%d start %s %s idle_before=%s inflight=%d", reqID, method, endpoint, fmtDur(idleBefore), inflight)
+	logger.Infof("[upstream] req=%d start %s %s idle_before=%s inflight=%d%s", reqID, method, endpoint, fmtDur(idleBefore), inflight, bodySummary(body))
 
 	var lastErr error
 	failures := 0
@@ -347,9 +354,16 @@ func (p *Provider) doWithRetry(method httpclient.HttpMethod, url string, body []
 	if p.resetIfIdle(reqID, idleBefore) {
 		resets++
 	}
+	sessionLimited := false
 	for attempt := 0; attempt < p.maxAttempts; attempt++ {
 		tag := fmt.Sprintf("req=%d attempt=%d/%d", reqID, attempt+1, p.maxAttempts)
-		if failures > 0 && p.sessionResetAfter > 0 && failures%p.sessionResetAfter == 0 {
+		if sessionLimited {
+			// ERR_BN_LIMIT 在原会话上通常持续到重建为止，没必要再等 4 次
+			sessionLimited = false
+			if p.resetSession(fmt.Sprintf("req=%d ERR_BN_LIMIT", reqID)) {
+				resets++
+			}
+		} else if failures > 0 && p.sessionResetAfter > 0 && failures%p.sessionResetAfter == 0 {
 			if p.resetSession(fmt.Sprintf("req=%d after %d consecutive failures", reqID, failures)) {
 				resets++
 			}
@@ -420,6 +434,7 @@ func (p *Provider) doWithRetry(method httpclient.HttpMethod, url string, body []
 			ctx, resp.StatusCode, summarizeChallenge(challengeBody), retryAfter, fmtDur(delay), newChallenge, setCookieSummary(resp.Header))
 		failures++
 		p.clearCache()
+		sessionLimited = bytes.Contains(challengeBody, []byte("ERR_BN_LIMIT"))
 		sleep(delay)
 	}
 	logger.Warnf("[upstream] req=%d failed attempts=%d resets=%d elapsed=%s err=%v", reqID, p.maxAttempts, resets, fmtDur(time.Since(start)), lastErr)
@@ -756,4 +771,18 @@ func summarizeChallenge(body []byte) string {
 	}
 	return fmt.Sprintf("ch_type=%s ch_override=%s ch_i=%s ch_sc=%d ch_e=%d ch_r=%s p=%s",
 		ch.Type, ch.OverrideCode, ch.CD.I, ch.CD.SC, ch.CD.E, ch.CD.R, strings.Join(segs, ","))
+}
+
+// bodySummary 输出请求体大小和消息条数，用于观察 418 是否与对话长度有关。
+func bodySummary(body []byte) string {
+	if body == nil {
+		return ""
+	}
+	var req struct {
+		Messages []json.RawMessage `json:"messages"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil || req.Messages == nil {
+		return fmt.Sprintf(" body_bytes=%d", len(body))
+	}
+	return fmt.Sprintf(" body_bytes=%d msgs=%d", len(body), len(req.Messages))
 }

@@ -173,26 +173,25 @@ func TestBNLimitResetsSessionImmediately(t *testing.T) {
 	}
 }
 
-func TestTokenIsSingleUseByDefault(t *testing.T) {
-	originalGenerate := generateVQDToken
-	t.Cleanup(func() { generateVQDToken = originalGenerate })
-	n := 0
-	generateVQDToken = func(string) (string, error) { n++; return "t", nil }
-	p := &Provider{
-		cfg: config{tokenExpiration: time.Minute, tokenMaxUses: 1},
-		tok: tokenState{challenge: cachedItem[string]{Value: "challenge", ExpireAt: time.Now().Add(time.Minute)}},
-	}
+func TestChainedChallengeIsUsedOnce(t *testing.T) {
+	// 响应头下发的挑战只能用一次：第一个请求用它，之后没有新挑战时回退到 /status
+	p, _, _ := newTestProvider(t, nil, 1)
+	p.cfg = config{tokenExpiration: time.Minute, tokenMaxUses: 1, challengeTTL: time.Minute, maxAttempts: 1}
+	p.cacheChallengeFromHeader(http.Header{"X-Vqd-Hash-1": {base64.StdEncoding.EncodeToString([]byte("next"))}})
+
+	var sources []string
 	for i := 0; i < 3; i++ {
 		info, err := p.acquireToken()
 		if err != nil {
 			t.Fatal(err)
 		}
 		if !info.fresh {
-			t.Fatalf("call %d reused cached token", i)
+			t.Fatalf("call %d reused a token", i)
 		}
+		sources = append(sources, info.challenge)
 	}
-	if n != 3 {
-		t.Fatalf("solves = %d, want 3", n)
+	if got := strings.Join(sources, ","); got != "chained,status,status" {
+		t.Fatalf("challenge sources = %s", got)
 	}
 }
 

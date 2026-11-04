@@ -38,13 +38,13 @@ const (
 
 // config 汇总所有可通过环境变量调整的参数。
 type config struct {
-	feVersion            string        // FE_VERSION，为空时使用线上解析值
-	tokenExpiration      time.Duration // TOKEN_EXPIRATION_SECONDS
-	tokenMaxUses         int           // TOKEN_MAX_USES，0 表示不限
-	scriptsCacheDuration time.Duration // SCRIPTS_CACHE_SECONDS
-	maxAttempts          int           // UPSTREAM_MAX_RETRIES + 1
-	sessionResetAfter    int           // SESSION_RESET_AFTER_FAILURES，0 关闭
-	idleResetAfter       time.Duration // IDLE_SESSION_RESET_SECONDS，0 关闭
+	feVersion         string        // FE_VERSION，为空时使用线上解析值
+	tokenExpiration   time.Duration // TOKEN_EXPIRATION_SECONDS
+	tokenMaxUses      int           // TOKEN_MAX_USES，0 表示不限
+	challengeTTL      time.Duration // SCRIPTS_CACHE_SECONDS：响应头挑战的有效期，0 表示每次走 /status
+	maxAttempts       int           // UPSTREAM_MAX_RETRIES + 1
+	sessionResetAfter int           // SESSION_RESET_AFTER_FAILURES，0 关闭
+	idleResetAfter    time.Duration // IDLE_SESSION_RESET_SECONDS，0 关闭
 }
 
 func loadConfig() config {
@@ -53,11 +53,11 @@ func loadConfig() config {
 		// token 默认一次一用：网页每发一条消息都会重新求解挑战
 		tokenExpiration: envSeconds("TOKEN_EXPIRATION_SECONDS", time.Second),
 		tokenMaxUses:    envInt("TOKEN_MAX_USES", 1),
-		// 默认每次向 /status 取新挑战（网页会沿用响应头下发的挑战，本项目尚未验证这种方式）
-		scriptsCacheDuration: envSeconds("SCRIPTS_CACHE_SECONDS", 0),
-		maxAttempts:          envInt("UPSTREAM_MAX_RETRIES", 6) + 1,
-		sessionResetAfter:    envInt("SESSION_RESET_AFTER_FAILURES", 2),
-		idleResetAfter:       time.Duration(envInt("IDLE_SESSION_RESET_SECONDS", 1800)) * time.Second,
+		// 网页沿用上一个响应下发的挑战，实测页面加载 3 分钟后再用仍然有效
+		challengeTTL:      envSeconds("SCRIPTS_CACHE_SECONDS", 300*time.Second),
+		maxAttempts:       envInt("UPSTREAM_MAX_RETRIES", 6) + 1,
+		sessionResetAfter: envInt("SESSION_RESET_AFTER_FAILURES", 2),
+		idleResetAfter:    time.Duration(envInt("IDLE_SESSION_RESET_SECONDS", 1800)) * time.Second,
 	}
 }
 
@@ -129,7 +129,7 @@ func envInt(key string, def int) int {
 }
 
 func envSeconds(key string, def time.Duration) time.Duration {
-	if v, err := strconv.Atoi(os.Getenv(key)); err == nil && v > 0 {
+	if v, err := strconv.Atoi(os.Getenv(key)); err == nil && v >= 0 {
 		return time.Duration(v) * time.Second
 	}
 	return def

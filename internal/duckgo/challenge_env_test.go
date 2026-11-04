@@ -32,10 +32,10 @@ func TestParseHTMLFragmentMatchesBrowser(t *testing.T) {
 func runInPrelude(t *testing.T, js string) string {
 	t.Helper()
 	vm := goja.New()
-	if err := installVQDHelpers(vm); err != nil {
+	if err := installSandboxGlobals(vm); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := vm.RunString(vqdBrowserPrelude); err != nil {
+	if _, err := vm.RunString(sandboxJS); err != nil {
 		t.Fatal(err)
 	}
 	v, err := vm.RunString(js)
@@ -85,7 +85,7 @@ func TestUpdateFrontendFromHTMLParsesVersion(t *testing.T) {
 	page := []byte(`<html data-version-tag="serp_X_ET" data-version-sha="abc123">`)
 	updateFrontendFromHTML(nil, page)
 	p := &Provider{}
-	if got := p.currentFEVersion(); got != "serp_X_ET-abc123" {
+	if got := p.feVersion(); got != "serp_X_ET-abc123" {
 		t.Fatalf("fe version = %q", got)
 	}
 }

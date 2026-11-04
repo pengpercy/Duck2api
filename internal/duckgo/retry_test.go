@@ -55,12 +55,10 @@ func newTestProvider(t *testing.T, statuses []int, maxAttempts int) (*Provider, 
 		return &fakeClient{statuses: statuses, calls: &chatCalls}
 	}
 	p := &Provider{
-		client:            newClient(),
-		sessionAt:         time.Now(),
-		newClient:         newClient,
-		maxAttempts:       maxAttempts,
-		sessionResetAfter: 2,
+		cfg:       config{maxAttempts: maxAttempts, sessionResetAfter: 2},
+		newClient: newClient,
 	}
+	p.sess = session{client: newClient(), createdAt: time.Now()}
 	return p, &chatCalls, &created
 }
 
@@ -100,8 +98,8 @@ func TestPostConversationReturnsLastUpstreamResponse(t *testing.T) {
 
 func TestIdleSessionIsRebuiltBeforeRequest(t *testing.T) {
 	p, _, created := newTestProvider(t, []int{http.StatusOK, http.StatusOK}, 3)
-	p.idleResetAfter = time.Minute
-	p.lastSuccess = time.Now().Add(-2 * time.Minute)
+	p.cfg.idleResetAfter = time.Minute
+	p.sess.lastSuccess = time.Now().Add(-2 * time.Minute)
 
 	if _, err := p.PostConversation(duckgotypes.ApiRequest{}); err != nil {
 		t.Fatal(err)
@@ -122,9 +120,9 @@ func TestIdleSessionIsRebuiltBeforeRequest(t *testing.T) {
 func TestIdleResetDoesNotSwallowLaterFailureReset(t *testing.T) {
 	// 空闲重建后紧接着的失败重置会被冷却期跳过；确认请求仍能在后续尝试成功，且不会多建客户端
 	p, chatCalls, created := newTestProvider(t, []int{http.StatusTeapot, http.StatusTeapot, http.StatusOK}, 5)
-	p.sessionResetAfter = 1
-	p.idleResetAfter = time.Minute
-	p.lastSuccess = time.Now().Add(-2 * time.Minute)
+	p.cfg.sessionResetAfter = 1
+	p.cfg.idleResetAfter = time.Minute
+	p.sess.lastSuccess = time.Now().Add(-2 * time.Minute)
 
 	resp, err := p.PostConversation(duckgotypes.ApiRequest{})
 	if err != nil {
@@ -153,15 +151,14 @@ func TestSummarizeChallenge(t *testing.T) {
 
 func TestBNLimitResetsSessionImmediately(t *testing.T) {
 	p, chatCalls, created := newTestProvider(t, []int{http.StatusTeapot, http.StatusOK}, 5)
-	p.sessionResetAfter = 4
+	p.cfg.sessionResetAfter = 4
 	bn := `{"action":"error","status":418,"type":"ERR_BN_LIMIT","overrideCode":"090c"}`
 	bodies := []string{bn}
 	p.newClient = func() httpclient.AuroraHttpClient {
 		atomic.AddInt32(created, 1)
 		return &fakeClient{statuses: []int{http.StatusTeapot, http.StatusOK}, bodies: bodies, calls: chatCalls}
 	}
-	p.client = p.newClient()
-	p.sessionAt = time.Now().Add(-time.Minute) // 不在冷却期内
+	p.sess.client = p.newClient()
 
 	resp, err := p.PostConversation(duckgotypes.ApiRequest{})
 	if err != nil {
@@ -182,9 +179,8 @@ func TestTokenIsSingleUseByDefault(t *testing.T) {
 	n := 0
 	generateVQDToken = func(string) (string, error) { n++; return "t", nil }
 	p := &Provider{
-		jsCode:          cachedItem[string]{Value: "challenge", ExpireAt: time.Now().Add(time.Minute)},
-		tokenExpiration: time.Minute,
-		tokenMaxUses:    1,
+		cfg: config{tokenExpiration: time.Minute, tokenMaxUses: 1},
+		tok: tokenState{challenge: cachedItem[string]{Value: "challenge", ExpireAt: time.Now().Add(time.Minute)}},
 	}
 	for i := 0; i < 3; i++ {
 		info, err := p.acquireToken()

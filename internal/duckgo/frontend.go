@@ -5,20 +5,20 @@ import (
 	"aurora/logger"
 	"fmt"
 	"io"
+	"net/http"
 	"regexp"
 	"strings"
 	"sync"
 	"unicode/utf16"
 )
 
-// frontendInfo 记录当前线上 duck.ai 前端的版本信息。挑战求解结果里的 meta.stack、
-// 请求头 x-fe-version 以及挑战检测的 window.__DDG_*__ 都来自前端，duck.ai 每次发版都会变化，
-// 写死的旧值会让请求看起来像过期客户端。
+// frontendInfo 是线上 duck.ai 前端的版本信息。x-fe-version、挑战里的 window.__DDG_*__
+// 和 meta.stack 都随前端发版变化，因此每次预热会话时从 /chat 页面重新解析。
 type frontendInfo struct {
 	beVersion string // <html data-version-tag>
 	feHash    string // <html data-version-sha>
 	bundle    string // entry.duckai.<hash>.js
-	stack     string // 真实浏览器求解挑战时 new Error().stack 的样子
+	stack     string // 网页求解挑战时 meta.stack 的值
 }
 
 var (
@@ -44,7 +44,8 @@ var (
 	reSolveCaller = regexp.MustCompile(`=await Promise\.race\(\[\(0,[\w$]+\.[\w$]+\)\(e,[\w$]+\.current\),n\]\)`)
 )
 
-// updateFrontendFromHTML 解析 /chat 页面，必要时下载新的入口 bundle 计算 stack。
+// updateFrontendFromHTML 解析 /chat 页面；入口 bundle 变化时下载它重新计算 stack。
+// 返回给预热日志的附注（如 "stack=updated"），无变化时为空。
 func updateFrontendFromHTML(client httpclient.AuroraHttpClient, page []byte) string {
 	info := currentFrontend()
 	if m := reVersionTag.FindSubmatch(page); m != nil {
@@ -57,10 +58,10 @@ func updateFrontendFromHTML(client httpclient.AuroraHttpClient, page []byte) str
 	note := ""
 	if bundle != "" && bundle != info.bundle {
 		if stack, err := fetchBundleStack(client, bundle); err != nil {
-			note = fmt.Sprintf(" stack_err=%q", err.Error())
+			note = fmt.Sprintf("stack_err=%q", err.Error()) // 下次预热会重试
 		} else {
 			info.bundle, info.stack = bundle, stack
-			note = " stack=updated"
+			note = "stack=updated"
 		}
 	}
 	frontendMu.Lock()
@@ -68,25 +69,19 @@ func updateFrontendFromHTML(client httpclient.AuroraHttpClient, page []byte) str
 	frontendCur = info
 	frontendMu.Unlock()
 	if changed {
-		logger.Infof("[frontend] version=%s-%s bundle=%s%s", info.beVersion, info.feHash, info.bundle, note)
+		logger.Infof("[frontend] version=%s-%s bundle=%s %s", info.beVersion, info.feHash, info.bundle, note)
 	}
 	return note
 }
 
 func fetchBundleStack(client httpclient.AuroraHttpClient, bundle string) (string, error) {
 	url := "https://duck.ai/dist/duckai-dist/" + bundle
-	header := createHeader()
-	delete(header, "content-type")
-	delete(header, "origin")
-	header.Set("accept", "*/*")
-	header.Set("sec-fetch-dest", "script")
-	header.Set("sec-fetch-mode", "no-cors")
-	resp, err := client.Request(httpclient.GET, url, header, nil, nil)
+	resp, err := client.Request(httpclient.GET, url, scriptHeaders(), nil, nil)
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("bundle status %d", resp.StatusCode)
 	}
 	js, err := io.ReadAll(resp.Body)
@@ -96,7 +91,8 @@ func fetchBundleStack(client httpclient.AuroraHttpClient, bundle string) (string
 	return computeStack(url, string(js))
 }
 
-// computeStack 在 bundle 中定位求解函数，按 V8 的格式拼出 "Error\nat fn (url:line:col)\nat async url:line:col"。
+// computeStack 在 bundle 中定位求解函数，按 V8 格式拼出 "Error\nat fn (url:line:col)\nat async url:line:col"。
+// 假定求解函数与调用方在同一行（bundle 是压缩后的单行代码）。
 func computeStack(url, js string) (string, error) {
 	lines := strings.Split(js, "\n")
 	for i, line := range lines {

@@ -104,7 +104,7 @@ http_proxy=http://127.0.0.1:7890  # PROXY_URL 未设置时的后备代理
 #### Duck.ai
 
 ```bash
-FE_VERSION=... # 可覆盖默认 x-fe-version
+FE_VERSION=... # 覆盖 x-fe-version，默认从线上页面自动获取
 ```
 
 #### 缓存与性能
@@ -117,6 +117,18 @@ UPSTREAM_MAX_RETRIES=6 # 上游返回 418/429 时的自动重试次数
 SESSION_RESET_AFTER_FAILURES=2 # 连续失败多少次后重建 HTTP 会话（等同重启容器），0 为关闭
 IDLE_SESSION_RESET_SECONDS=1800 # 空闲超过该秒数后，下次请求前先重建会话，0 为关闭
 ```
+
+### 排查 418
+
+418 通常意味着挑战求解结果与真实浏览器不一致（duck.ai 会在挑战中加入新的环境检测）。用真实 Chrome 采集一批挑战，与本项目的求解器逐项对照：
+
+```bash
+docker run -d -p 9222:9222 chromedp/headless-shell
+node tools/challenge-compare/collect.mjs /tmp/corpus 40
+CHALLENGE_CORPUS=/tmp/corpus go test ./internal/duckgo -run TestChallengeCorpus -v
+```
+
+不一致的检测项需要在 `internal/duckgo/sandbox.js` 中补齐。
 
 ## 鸣谢
 

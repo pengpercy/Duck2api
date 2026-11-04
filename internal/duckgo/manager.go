@@ -107,8 +107,8 @@ func NewProvider(newClient func() httpclient.AuroraHttpClient, proxyURL string) 
 		// 默认一次一用，每次请求都重新求解挑战。
 		tokenMaxUses: getIntFromEnv("TOKEN_MAX_USES", 1),
 		// 默认不缓存挑战 JS：每个新请求都从 /status 取新挑战，复用旧挑战容易触发 418
-		// 必须保持 0：缓存后会改用 chat 响应头下发的挑战求解，实测同一会话 4~8 次后必然 418 ERR_BN_LIMIT，
-		// 且首次尝试通过率从 ~58% 降到 ~25%；每次从 /status 取新挑战则未再出现 ERR_BN_LIMIT。
+		// 默认 0：每次请求从 /status 取新挑战。网页本身会沿用 chat 响应头下发的挑战，
+		// 但在挑战沙箱修正之前，开启缓存时频繁出现 418 ERR_BN_LIMIT，修正后尚未重新验证。
 		scriptsCacheDuration: getDurationFromEnv("SCRIPTS_CACHE_SECONDS", 0),
 		maxAttempts:          getIntFromEnv("UPSTREAM_MAX_RETRIES", 6) + 1,
 		// 实测连续 418 两次就重建，第 3 次尝试的通过率约 40%（4 次才重建时约 12%）。

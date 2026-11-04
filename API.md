@@ -302,10 +302,11 @@ curl http://localhost:8080/ping
 | `LOG_LEVEL` | — | 日志级别 |
 | `FE_VERSION` | 内置值 | 覆盖 Duck.ai 前端版本 |
 | `TOKEN_EXPIRATION_SECONDS` | `1` | VQD token 缓存 |
+| `TOKEN_MAX_USES` | `1` | 单个 VQD token 最多使用次数（0 不限）。复用同一 token 会触发 418 `ERR_BN_LIMIT`，建议保持 1 |
 | `SCRIPTS_CACHE_SECONDS` | `0` | challenge JS 缓存（默认不缓存，每次请求取新挑战） |
 | `UPSTREAM_MAX_RETRIES` | `6` | 上游 418/429 自动重试次数 |
 | `SESSION_RESET_AFTER_FAILURES` | `4` | 连续失败 N 次后重建 HTTP 会话（0 关闭）。418 风控状态在服务端，重建会话通常无效，同会话稍等重试更易通过 |
-| `IDLE_SESSION_RESET_SECONDS` | `120` | 空闲超过 N 秒后，下次请求前先重建会话（0 关闭） |
+| `IDLE_SESSION_RESET_SECONDS` | `1800` | 空闲超过 N 秒后，下次请求前先重建会话（0 关闭）。新会话首个请求更容易 418，不宜过小 |
 | `CLAUDE_CODE_EFFORT_LEVEL` | 空 | Anthropic 未提供 `thinking` 时的默认推理档位 |
 
 代理优先级为：`PROXY_URL`、项目目录中的 `proxies.txt`（逐行轮询）、`http_proxy`。

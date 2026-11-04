@@ -25,8 +25,9 @@ import (
 
 const (
 	defaultVQDUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36"
-	defaultVQDStack     = "Error\nat l (https://duck.ai/dist/duckai-dist/entry.duckai.c0a8c794abcbc8ee2d3c.js:2:1446307)\nat async https://duck.ai/dist/duckai-dist/entry.duckai.c0a8c794abcbc8ee2d3c.js:2:1294181"
-	defaultVQDOrigin    = "https://duck.ai"
+	// 仅在未能从线上 bundle 计算出 stack 时使用（见 frontend.go），值取自 2026-11-05 的前端版本
+	defaultVQDStack  = "Error\nat l (https://duck.ai/dist/duckai-dist/entry.duckai.74577f9898a32db46c28.js:2:2159967)\nat async https://duck.ai/dist/duckai-dist/entry.duckai.74577f9898a32db46c28.js:2:1876332"
+	defaultVQDOrigin = "https://duck.ai"
 )
 
 // GenerateVQDHash 根据服务端返回的 X-Vqd-Hash-1 挑战值, 计算新的 hash 值.
@@ -70,6 +71,9 @@ func vqdUserAgent() string {
 
 func vqdStack() string {
 	if v := os.Getenv("X_VQD_STACK"); v != "" {
+		return v
+	}
+	if v := currentFrontend().stack; v != "" {
 		return v
 	}
 	return defaultVQDStack
@@ -139,6 +143,12 @@ func installVQDHelpers(vm *goja.Runtime) error {
 		"__goSha256Base64": goSha256Base64,
 		"__goBtoa":         func(v string) string { return base64.StdEncoding.EncodeToString([]byte(v)) },
 		"__goAtob":         func(v string) (string, error) { b, err := base64.StdEncoding.DecodeString(v); return string(b), err },
+		"__goBEVersion":    orDefault(currentFrontend().beVersion, "dev"),
+		"__goFEHash":       orDefault(currentFrontend().feHash, "hash"),
+		"__goParseHTMLFragment": func(v string) []interface{} {
+			out, n := parseHTMLFragment(v)
+			return []interface{}{out, n}
+		},
 	}
 	for name, fn := range helpers {
 		if err := vm.Set(name, fn); err != nil {
@@ -314,6 +324,18 @@ const vqdBrowserPrelude = `
     this.clientHeight = 1;
   }
   Element__.prototype.constructor = Element__;
+  // innerHTML 按 HTML5 规则解析/序列化（挑战会检测畸形标记的纠错结果）
+  Object.defineProperty(Element__.prototype, "innerHTML", {
+    configurable: true,
+    get: function () { return this.__html__ || ""; },
+    set: function (v) {
+      v = String(v);
+      if (v === "") { this.__html__ = ""; this.__htmlCount__ = 0; return; }
+      var r = __goParseHTMLFragment(v);
+      this.__html__ = r[0];
+      this.__htmlCount__ = r[1];
+    },
+  });
   Element__.prototype.appendChild = function (child) {
     child.parentNode = this;
     child.ownerDocument = this.ownerDocument;
@@ -346,13 +368,23 @@ const vqdBrowserPrelude = `
   }
 
   Element__.prototype.querySelectorAll = function (selector) {
-    selector = String(selector || "").toLowerCase();
+    // 注意不能整体转小写：属性值（如 Content-Security-Policy）区分大小写
+    selector = String(selector || "").trim();
+    var lower = selector.toLowerCase();
     // 特殊: #jsa
-    if (selector === "#jsa" && this.ownerDocument && this.ownerDocument.__jsa__) {
+    if (lower === "#jsa" && this.ownerDocument && this.ownerDocument.__jsa__) {
       return new NodeList__([this.ownerDocument.__jsa__]);
     }
+    if (selector === "*") {
+      var all = [];
+      for (var c = 0; c < this.children.length; c++) {
+        collectMatching__(this.children[c], function () { return true; }, all);
+      }
+      for (var h = 0; h < (this.__htmlCount__ || 0); h++) all.push(new Element__("div"));
+      return new NodeList__(all);
+    }
     // 特殊: meta[http-equiv="Content-Security-Policy"]
-    if (selector.indexOf("meta[") === 0) {
+    if (lower.indexOf("meta[") === 0) {
       var results = [];
       if (this.children && this.children.length > 0) {
         for (var i = 0; i < this.children.length; i++) {
@@ -556,8 +588,8 @@ const vqdBrowserPrelude = `
   defProp__(globalThis, "HTMLIFrameElement", HTMLIFrameElement__);
   defProp__(globalThis, "HTMLScriptElement", HTMLScriptElement__);
   defProp__(globalThis, "NodeList", NodeList__);
-  defProp__(globalThis, "__DDG_BE_VERSION__", "dev");
-  defProp__(globalThis, "__DDG_FE_CHAT_HASH__", "hash");
+  defProp__(globalThis, "__DDG_BE_VERSION__", __goBEVersion);
+  defProp__(globalThis, "__DDG_FE_CHAT_HASH__", __goFEHash);
   defProp__(globalThis, "Window", function Window() {});
   try { defProp__(globalThis.Window, "prototype", globalThis); } catch (e) {
     // Goja 的 Window 构造函数的 prototype 不可重新定义, 跳过
@@ -646,3 +678,10 @@ const vqdBrowserPrelude = `
   try { Object.defineProperty(HTMLScriptElement, "name", { value: "HTMLScriptElement", configurable: true }); } catch (e) {}
 })();
 `
+
+func orDefault(v, def string) string {
+	if v == "" {
+		return def
+	}
+	return v
+}

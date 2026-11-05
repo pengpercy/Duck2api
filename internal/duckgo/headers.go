@@ -83,17 +83,25 @@ func setChatHeaders(h httpclient.AuroraHeaders) {
 	h.Set("x-ddg-journey-id", newJourneyID())
 }
 
-// makeFESignals 生成 x-fe-signals：start 为上次发消息（或页面加载）的时间戳，end 为距今毫秒数。
-// 网页里后续消息的 events 通常为空，新对话时有 startNewChat_free。
-func makeFESignals() string {
-	end := int64(4000 + rand.Intn(40000))
-	events := []map[string]any{}
-	if rand.Intn(2) == 0 {
-		events = append(events, map[string]any{"name": "startNewChat_free", "delta": end - int64(150+rand.Intn(400))})
+// nextFESignals 生成 x-fe-signals。网页里它是一条连续的时间线：start 是上一次发消息
+// （首条则为页面加载）的时间，end 是距今的毫秒数，开新对话时 events 带 startNewChat_free。
+// 沿用挑战时服务端能把相邻两次请求串起来，时间线不连续会触发 ERR_BN_LIMIT。
+func (p *Provider) nextFESignals() string {
+	p.sessMu.Lock()
+	start := p.sess.lastSend
+	now := time.Now()
+	p.sess.lastSend = now
+	p.sessMu.Unlock()
+
+	end := now.Sub(start).Milliseconds()
+	// 本服务的每个请求都是新对话（新的 conversationId），新建对话略早于发送
+	delta := end - int64(800+rand.Intn(1500))
+	if delta < 0 {
+		delta = 0
 	}
 	data, _ := json.Marshal(map[string]any{
-		"start":  time.Now().UnixMilli() - end,
-		"events": events,
+		"start":  start.UnixMilli(),
+		"events": []map[string]any{{"name": "startNewChat_free", "delta": delta}},
 		"end":    end,
 	})
 	return base64.StdEncoding.EncodeToString(data)

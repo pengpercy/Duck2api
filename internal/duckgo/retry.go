@@ -102,7 +102,7 @@ func (p *Provider) attempt(c *upstreamCall, attempt int, method httpclient.HttpM
 	header := apiHeaders()
 	decorate(header)
 	header.Set("x-vqd-hash-1", tok.value)
-	header.Set("x-fe-signals", makeFESignals())
+	header.Set("x-fe-signals", p.nextFESignals())
 	header.Set("x-fe-version", p.feVersion())
 
 	var reader io.Reader

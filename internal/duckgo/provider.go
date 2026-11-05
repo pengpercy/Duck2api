@@ -80,7 +80,7 @@ type Provider struct {
 // NewProvider 创建 Provider 并预热首个会话。newClient 在会话需要重建时会被再次调用。
 func NewProvider(newClient func() httpclient.AuroraHttpClient, proxyURL string) (*Provider, error) {
 	p := &Provider{cfg: loadConfig(), newClient: newClient, proxyURL: proxyURL}
-	p.sess = session{client: p.buildClient(), createdAt: time.Now()}
+	p.sess = p.newSession(0)
 	p.warmSession("startup")
 	p.sess.lastSuccess = time.Now()
 	return p, nil
@@ -88,6 +88,7 @@ func NewProvider(newClient func() httpclient.AuroraHttpClient, proxyURL string) 
 
 // PostConversation 发送一次聊天请求，返回上游的 SSE 响应。
 func (p *Provider) PostConversation(request duckgotypes.ApiRequest) (*http.Response, error) {
+	request.DurableStream.PublicKey = p.sessionPublicKey()
 	body, err := json.Marshal(request)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request body: %w", err)

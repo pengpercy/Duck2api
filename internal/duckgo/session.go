@@ -3,8 +3,13 @@ package duckgo
 import (
 	"aurora/httpclient"
 	"aurora/logger"
+	duckgotypes "aurora/typings/duckgo"
+	"crypto/rand"
+	"crypto/rsa"
+	"encoding/base64"
 	"fmt"
 	"io"
+	"math/big"
 	"net/http"
 	"strings"
 	"sync"
@@ -23,6 +28,9 @@ type session struct {
 	reqs        int // 在该客户端上发出的上游 API 请求数
 	lastReset   time.Time
 	lastSuccess time.Time
+	// publicKey 是 durableStream 的 RSA 公钥。网页在整个页面生命周期内只生成一次，
+	// 跨会话复用；每条消息换一把新钥匙会在沿用挑战时触发 ERR_BN_LIMIT。
+	publicKey duckgotypes.PublicKey
 }
 
 // sessionInfo 是某次请求所用会话的快照，用于日志。
@@ -42,6 +50,35 @@ func (p *Provider) buildClient() httpclient.AuroraHttpClient {
 		client.SetProxy(p.proxyURL)
 	}
 	return client
+}
+
+func (p *Provider) newSession(gen uint64) session {
+	return session{client: p.buildClient(), gen: gen, createdAt: time.Now(), publicKey: newPublicKey()}
+}
+
+// sessionPublicKey 返回当前会话的 durableStream 公钥。
+func (p *Provider) sessionPublicKey() duckgotypes.PublicKey {
+	p.sessMu.Lock()
+	defer p.sessMu.Unlock()
+	return p.sess.publicKey
+}
+
+// newPublicKey 生成与网页 crypto.subtle.exportKey("jwk") 相同格式的 RSA-OAEP 公钥。
+// 私钥用不到：只有恢复中断的流才需要解密。
+func newPublicKey() duckgotypes.PublicKey {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return duckgotypes.PublicKey{}
+	}
+	return duckgotypes.PublicKey{
+		Alg:    "RSA-OAEP-256",
+		E:      base64.RawURLEncoding.EncodeToString(big.NewInt(int64(key.PublicKey.E)).Bytes()),
+		Ext:    true,
+		KeyOps: []string{"encrypt"},
+		Kty:    "RSA",
+		N:      base64.RawURLEncoding.EncodeToString(key.PublicKey.N.Bytes()),
+		Use:    "enc",
+	}
 }
 
 func (p *Provider) currentClient() (httpclient.AuroraHttpClient, uint64) {
@@ -121,7 +158,8 @@ func (p *Provider) resetSession(reason string) bool {
 	}
 	old := p.sess
 	now := time.Now()
-	p.sess = session{client: p.buildClient(), gen: old.gen + 1, createdAt: now, lastReset: now, lastSuccess: old.lastSuccess}
+	p.sess = p.newSession(old.gen + 1)
+	p.sess.lastReset, p.sess.lastSuccess = now, old.lastSuccess
 	p.sessMu.Unlock()
 
 	p.clearCache()

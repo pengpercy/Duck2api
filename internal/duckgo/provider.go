@@ -53,8 +53,9 @@ func loadConfig() config {
 		// token 默认一次一用：网页每发一条消息都会重新求解挑战
 		tokenExpiration: envSeconds("TOKEN_EXPIRATION_SECONDS", time.Second),
 		tokenMaxUses:    envInt("TOKEN_MAX_USES", 1),
-		// 网页沿用上一个响应下发的挑战，实测页面加载 3 分钟后再用仍然有效
-		challengeTTL:      envSeconds("SCRIPTS_CACHE_SECONDS", 300*time.Second),
+		// 默认每次走 /status。网页会沿用上一个响应下发的挑战，但实测连发请求时沿用
+		// 容易触发 ERR_BN_LIMIT，而 /status 在同样节奏下没有失败，只多一次约 60ms 的往返
+		challengeTTL:      envSeconds("SCRIPTS_CACHE_SECONDS", 0),
 		maxAttempts:       envInt("UPSTREAM_MAX_RETRIES", 6) + 1,
 		sessionResetAfter: envInt("SESSION_RESET_AFTER_FAILURES", 2),
 		idleResetAfter:    time.Duration(envInt("IDLE_SESSION_RESET_SECONDS", 1800)) * time.Second,

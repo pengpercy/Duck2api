@@ -116,7 +116,7 @@ CLAUDE_CODE_EFFORT_LEVEL=...      # /v1/messages 未提供 thinking 时的默认
 ```bash
 TOKEN_EXPIRATION_SECONDS=1        # 求解出的 token 缓存秒数
 TOKEN_MAX_USES=1                  # 单个 token 最多使用次数，建议保持 1（与网页一致，每条消息重新求解）
-SCRIPTS_CACHE_SECONDS=300         # 响应头下发的下一个挑战的有效期，过期或为 0 时改向 /status 取挑战
+SCRIPTS_CACHE_SECONDS=0           # >0 时像网页一样沿用响应头下发的下一个挑战（单位秒，即有效期）；默认 0 每次向 /status 取挑战。连发请求时沿用模式容易出现 ERR_BN_LIMIT
 UPSTREAM_MAX_RETRIES=6            # 上游返回 418/429 时的自动重试次数
 SESSION_RESET_AFTER_FAILURES=2    # 连续失败多少次后重建 HTTP 会话（等同重启容器），0 为关闭
 IDLE_SESSION_RESET_SECONDS=1800   # 空闲超过该秒数后，下次请求前先重建会话，0 为关闭

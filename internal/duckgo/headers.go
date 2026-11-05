@@ -85,7 +85,7 @@ func setChatHeaders(h httpclient.AuroraHeaders) {
 
 // nextFESignals 生成 x-fe-signals。网页里它是一条连续的时间线：start 是上一次发消息
 // （首条则为页面加载）的时间，end 是距今的毫秒数，开新对话时 events 带 startNewChat_free。
-// 沿用挑战时服务端能把相邻两次请求串起来，时间线不连续会触发 ERR_BN_LIMIT。
+// 沿用挑战时服务端能把相邻请求串起来，此前随机生成的时间线会很快触发 ERR_BN_LIMIT。
 func (p *Provider) nextFESignals() string {
 	p.sessMu.Lock()
 	start := p.sess.lastSend

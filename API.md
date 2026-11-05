@@ -306,7 +306,7 @@ curl http://localhost:8080/ping
 | `X_VQD_ORIGIN` | `https://duck.ai` | 覆盖挑战应答的 `meta.origin` |
 | `TOKEN_EXPIRATION_SECONDS` | `1` | 求解出的 VQD token 缓存秒数 |
 | `TOKEN_MAX_USES` | `1` | 单个 VQD token 最多使用次数（0 不限），建议保持 1 |
-| `SCRIPTS_CACHE_SECONDS` | `300` | 响应头下发的下一个挑战的有效期（与网页一致，每个挑战只用一次）；过期或为 `0` 时向 `/status` 取挑战 |
+| `SCRIPTS_CACHE_SECONDS` | `0` | 大于 0 时像网页一样沿用响应头下发的下一个挑战（每个只用一次），值为其有效期秒数；默认 `0` 每次向 `/status` 取挑战。连发请求时沿用模式容易触发 `ERR_BN_LIMIT`，`/status` 模式只多约 60ms |
 | `UPSTREAM_MAX_RETRIES` | `6` | 上游 418/429 自动重试次数 |
 | `SESSION_RESET_AFTER_FAILURES` | `2` | 连续失败 N 次后重建 HTTP 会话（0 关闭）。遇到 `ERR_BN_LIMIT` 时立即重建 |
 | `IDLE_SESSION_RESET_SECONDS` | `1800` | 空闲超过 N 秒后，下次请求前先重建会话（0 关闭） |

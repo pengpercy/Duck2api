@@ -13,7 +13,6 @@ func TestLoadConfigDefaults(t *testing.T) {
 	want := config{
 		tokenExpiration:   time.Second,
 		tokenMaxUses:      1,
-		challengeTTL:      5 * time.Minute,
 		maxAttempts:       7,
 		sessionResetAfter: 2,
 		idleResetAfter:    30 * time.Minute,
@@ -22,8 +21,8 @@ func TestLoadConfigDefaults(t *testing.T) {
 		t.Fatalf("defaults = %+v, want %+v", got, want)
 	}
 
-	t.Setenv("SCRIPTS_CACHE_SECONDS", "0")
-	if got := loadConfig().challengeTTL; got != 0 {
-		t.Fatalf("SCRIPTS_CACHE_SECONDS=0 -> %s, want 0 (disable chaining)", got)
+	t.Setenv("SCRIPTS_CACHE_SECONDS", "300")
+	if got := loadConfig().challengeTTL; got != 5*time.Minute {
+		t.Fatalf("SCRIPTS_CACHE_SECONDS=300 -> %s, want 5m", got)
 	}
 }

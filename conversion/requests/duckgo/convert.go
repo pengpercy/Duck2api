@@ -4,8 +4,6 @@ import (
 	duckgotypes "aurora/typings/duckgo"
 	officialtypes "aurora/typings/official"
 	"bytes"
-	"crypto/rand"
-	"crypto/rsa"
 	"encoding/base64"
 	"image"
 	"image/draw"
@@ -13,7 +11,6 @@ import (
 	"image/png"
 	"log"
 	"math"
-	"math/big"
 	"strings"
 
 	"github.com/deepteams/webp"
@@ -251,25 +248,9 @@ func extractContent(content interface{}) string {
 	return text.String()
 }
 
+// newDurableStream 只生成消息与会话 ID；publicKey 由 duckgo.Provider 按会话填入。
 func newDurableStream() duckgotypes.DurableStream {
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		return duckgotypes.DurableStream{}
-	}
-
-	return duckgotypes.DurableStream{
-		MessageID:      uuid.NewString(),
-		ConversationID: uuid.NewString(),
-		PublicKey: duckgotypes.PublicKey{
-			Alg:    "RSA-OAEP-256",
-			E:      base64.RawURLEncoding.EncodeToString(big.NewInt(int64(key.PublicKey.E)).Bytes()),
-			Ext:    true,
-			KeyOps: []string{"encrypt"},
-			Kty:    "RSA",
-			N:      base64.RawURLEncoding.EncodeToString(key.PublicKey.N.Bytes()),
-			Use:    "enc",
-		},
-	}
+	return duckgotypes.DurableStream{MessageID: uuid.NewString(), ConversationID: uuid.NewString()}
 }
 
 // convertToWebP converts image data to WebP format with compression and resizing

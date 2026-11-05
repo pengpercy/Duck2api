@@ -28,8 +28,8 @@ type session struct {
 	reqs        int // 在该客户端上发出的上游 API 请求数
 	lastReset   time.Time
 	lastSuccess time.Time
-	// publicKey 是 durableStream 的 RSA 公钥。网页在整个页面生命周期内只生成一次，
-	// 跨会话复用；每条消息换一把新钥匙会在沿用挑战时触发 ERR_BN_LIMIT。
+	lastSend    time.Time // 上次发出 API 请求的时间，x-fe-signals 的起点；新会话为创建时间（相当于页面加载）
+	// publicKey 是 durableStream 的 RSA 公钥，网页每次页面加载只生成一次，跨对话复用。
 	publicKey duckgotypes.PublicKey
 }
 
@@ -53,7 +53,8 @@ func (p *Provider) buildClient() httpclient.AuroraHttpClient {
 }
 
 func (p *Provider) newSession(gen uint64) session {
-	return session{client: p.buildClient(), gen: gen, createdAt: time.Now(), publicKey: newPublicKey()}
+	now := time.Now()
+	return session{client: p.buildClient(), gen: gen, createdAt: now, lastSend: now, publicKey: newPublicKey()}
 }
 
 // sessionPublicKey 返回当前会话的 durableStream 公钥。
